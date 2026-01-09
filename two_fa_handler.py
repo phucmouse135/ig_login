@@ -89,8 +89,9 @@ def setup_2fa(driver, email, email_pass):
     body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
     
     # --- KIỂM TRA SỚM: ĐÃ BẬT 2FA CHƯA? ---
-    if "is on" in body_text or "đang bật" in body_text:
-         print("   [2FA] 2FA ĐÃ ĐƯỢC BẬT TỪ TRƯỚC -> DỪNG.")
+    # User Request: check text "Two-factor authentication is on"
+    if "two-factor authentication is on" in body_text or "is on" in body_text or "đang bật" in body_text:
+         print("   [2FA] Phát hiện: 2FA ĐÃ ĐƯỢC BẬT TỪ TRƯỚC. Dừng lại.")
          raise Exception("ALREADY_2FA_ON")
 
     # Các từ khóa xuất hiện trong ảnh bạn gửi: "check your email", "enter the code"
