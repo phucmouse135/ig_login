@@ -1,7 +1,6 @@
 # mail_handler.py
 import time
 import re
-from datetime import datetime, timedelta
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
@@ -14,45 +13,6 @@ def wait_element(driver, by, value, timeout=10):
         return WebDriverWait(driver, timeout).until(EC.visibility_of_element_located((by, value)))
     except:
         return None
-
-
-def _parse_mail_list_time_to_datetime(date_text: str, now: datetime) -> datetime | None:
-    """
-    Parse thời gian từ danh sách mail.
-    Chiến thuật: 
-    - Nếu text chứa chữ cái (Jan, Feb, Yesterday...) -> return None (Quá cũ).
-    - Nếu chỉ có giờ (1:06 AM) -> Parse thành giờ hôm nay.
-    """
-    if not date_text:
-        return None
-
-    t = date_text.strip()
-
-    # Nếu có chữ cái (trừ AM/PM) thì là mail cũ (Ngày tháng hoặc Yesterday)
-    # Ví dụ: "Jan 08" hoặc "Yesterday" -> Bỏ qua
-    chars_check = t.replace("AM", "").replace("PM", "").replace("am", "").replace("pm", "").replace(" ", "").replace(":", "")
-    if any(c.isalpha() for c in chars_check):
-        return None # Mail cũ, không cần parse
-
-    # Chỉ parse giờ phút (tức là mail trong ngày hôm nay)
-    parsed_time = None
-    for fmt in ("%I:%M %p", "%H:%M"): # 01:06 AM hoặc 13:06
-        try:
-            parsed_time = datetime.strptime(t, fmt).time()
-            break
-        except ValueError:
-            continue
-
-    if parsed_time is not None:
-        # Gán giờ đó vào ngày hôm nay
-        candidate = now.replace(hour=parsed_time.hour, minute=parsed_time.minute, second=0, microsecond=0)
-        
-        # Xử lý trường hợp lệch phút nhỏ do độ trễ server/máy local
-        # Nếu candidate > now khoảng vài tiếng -> Có thể là sai múi giờ, nhưng ta chỉ quan tâm < 5 phút.
-        # Nếu candidate > now (tương lai) nhưng nhỏ (vài giây/phút) -> chấp nhận do lệch đồng hồ.
-        return candidate
-
-    return None
 
 
 def _find_rows_with_frame_search(driver):
@@ -142,32 +102,6 @@ def _find_target_mail_row(driver, target_subject):
     return None
 
 
-def _row_has_instagram_and_subject(row, subject_required: str) -> bool:
-    """Kiểm tra Sender là Instagram VÀ Subject chứa từ khóa."""
-    subject_req_l = (subject_required or "").strip().lower()
-    
-    # 1. Kiểm tra Sender
-    try:
-        name_el = row.find_element(By.CSS_SELECTOR, "div.name")
-        # Lấy cả text hiển thị và title (đôi khi title chứa email full)
-        name_text = ((name_el.text or "") + " " + (name_el.get_attribute("title") or "")).lower()
-        if "instagram" not in name_text:
-            return False
-    except Exception:
-        return False # Không tìm thấy tên người gửi -> Bỏ
-
-    # 2. Kiểm tra Subject
-    try:
-        subj_el = row.find_element(By.CSS_SELECTOR, "span.subject")
-        subj = (subj_el.get_attribute("title") or subj_el.text or "").strip().lower()
-        if subject_req_l and subject_req_l not in subj:
-            return False
-    except Exception:
-        return False
-
-    return True
-
-
 def _row_is_unread(row) -> bool:
     """Kiểm tra mail chưa đọc dựa trên class 'marked' (User: có class marked = unread)"""
     try:
@@ -201,29 +135,6 @@ def _describe_row_brief(row) -> str:
     return f"[Sender: {sender} | Subj: {subject} | Time: {date_text} | Unread: {is_unread}]"
 
 
-def _row_is_recent(row, max_age_minutes: int = 5) -> bool:
-    """Kiểm tra cột Date của row có trong vòng 5 phút không"""
-    now = datetime.now()
-    try:
-        date_el = row.find_element(By.CSS_SELECTOR, "div.date")
-        date_text = (date_el.text or "").strip()
-    except Exception:
-        return False
-
-    mail_dt = _parse_mail_list_time_to_datetime(date_text, now)
-    
-    if mail_dt is None:
-        # Parse ra None nghĩa là mail cũ (có chứa ngày tháng)
-        return False
-        
-    # Tính khoảng cách thời gian
-    diff = now - mail_dt
-    # Lấy trị tuyệt đối để tránh lỗi nếu giờ server nhanh hơn giờ máy vài giây
-    total_seconds = abs(diff.total_seconds())
-    
-    return total_seconds <= (max_age_minutes * 60)
-
-
 def _click_mail_row(driver, row) -> None:
     """Click vào mail để mở (tránh checkbox/star)"""
     try:
@@ -255,15 +166,6 @@ def _click_mail_row(driver, row) -> None:
         print("   [Mail] Đã thực hiện click mở mail.")
     except Exception as e:
         print(f"   [Mail] Warning click row: {e}")
-
-def detect_mail_block_reason(driver) -> str | None:
-    try:
-        text = driver.find_element(By.TAG_NAME, "body").text.lower()
-        keywords = ["captcha", "verify", "blocked", "suspicious", "security check"]
-        if any(k in text for k in keywords):
-            return "Blocked/Captcha required."
-    except: pass
-    return None
 
 def extract_instagram_code(text: str) -> str | None:
     # print("   [Mail] Đang cố gắng extract Instagram code từ nội dung mail...", text)
