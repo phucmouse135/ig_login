@@ -80,10 +80,6 @@ def process_account(line_data):
         error_str = str(e).replace("\n", " ").replace("\t", " ")
         result_to_save = f"ERROR: {error_str}"
         print(Fore.RED + f"[{username}] Lỗi Exception: {str(e)}")
-        # Có thể chụp ảnh lỗi cuối cùng
-        if driver:
-            try: driver.save_screenshot(f"error_{username}.png")
-            except: pass
             
     finally:
         if driver:

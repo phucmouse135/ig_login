@@ -174,23 +174,63 @@ def setup_2fa(driver, email, email_pass):
     time.sleep(3)
 
     # BƯỚC 5: TẠO OTP VÀ CONFIRM
-    clean_key = secret_key.replace(" ", "")
-    totp = pyotp.TOTP(clean_key)
+    # Clean Key triệt để: Xóa mọi khoảng trắng, tab, xuống dòng
+    clean_key = "".join(secret_key.split())
+    # print(f"   [2FA] Clean Key: {clean_key}") # Debug nếu cần
+    
+    # Tạo OTP (Lưu ý: System Time máy tính phải chuẩn)
+    totp = pyotp.TOTP(clean_key, interval=30)
     otp_code = totp.now()
     
     print(f"   [2FA] OTP Code generated: {otp_code}")
+    print("   [2FA] Lưu ý: Nếu OTP sai, hãy đồng bộ lại giờ hệ thống (Time Sync)!")
     
     # Nhập OTP
     wait_and_send_keys(driver, By.CSS_SELECTOR, "input[type='text'], input[type='number']", otp_code)
-    time.sleep(1)
+    time.sleep(2)
     
-    # Nhấn Next
-    wait_and_click(driver, By.XPATH, "//div[@role='button']//span[contains(text(), 'Next') or contains(text(), 'Tiếp')]")
+    # Nhấn Next (Cập nhật XPath mới dựa trên HTML user cung cấp)
+    # HTML: ... <span><span>Next</span></span> ...
+    print("   [2FA] Nhấn Next để xác nhận OTP...")
+    xpath_next_otp = "//span[text()='Next' or text()='Tiếp']"
+    clicked_next = False
+    
+    try:
+        # Tìm element Next
+        els = driver.find_elements(By.XPATH, xpath_next_otp)
+        for el in els:
+            if el.is_displayed():
+                el.click()
+                clicked_next = True
+                break
+    except: pass
+    
+    # Fallback nếu cách trên không được
+    if not clicked_next:
+         wait_and_click(driver, By.XPATH, "//div[@role='button']//span[contains(text(), 'Next') or contains(text(), 'Tiếp')]")
+         
     time.sleep(5)
     
     print("   [2FA] Xác nhận hoàn tất.")
     
-    # Nhấn Done (Nếu có)
-    wait_and_click(driver, By.XPATH, "//div[@role='button']//span[contains(text(), 'Done') or contains(text(), 'Xong')]")
+    # Nhấn Done (Cập nhật XPath mới cho Done)
+    # HTML: ... <span><span>Done</span></span> ...
+    print("   [2FA] Nhấn Done...")
+    xpath_done = "//span[text()='Done' or text()='Xong']"
+    clicked_done = False
     
+    try:
+        els = driver.find_elements(By.XPATH, xpath_done)
+        for el in els:
+            if el.is_displayed():
+                el.click()
+                clicked_done = True
+                break
+    except: pass
+
+    # Fallback Done
+    if not clicked_done:
+        wait_and_click(driver, By.XPATH, "//div[@role='button']//span[contains(text(), 'Done') or contains(text(), 'Xong')]")
+    
+    time.sleep(3)
     return secret_key
