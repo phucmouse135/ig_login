@@ -40,7 +40,7 @@ def process_account(line_data):
     
     try:
         # 1. Khởi tạo Browser
-        driver = get_driver(headless=False) # Để False để bạn nhìn thấy quy trình, OK rồi thì sửa thành True
+        driver = get_driver(headless=True) # Để False để bạn nhìn thấy quy trình, OK rồi thì sửa thành True
         
         # 2. Login Instagram
         if login_instagram_via_cookie(driver, cookie_str):

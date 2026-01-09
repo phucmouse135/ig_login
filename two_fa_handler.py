@@ -34,38 +34,65 @@ def setup_2fa(driver, email, email_pass):
     
 
     # BƯỚC 1: CHỌN TÀI KHOẢN
-    print("   [2FA] Chọn tài khoản...")
+    print("   [2FA] Chọn tài khoản (Ưu tiên Instagram đầu tiên)...")
+    time.sleep(3) # Chờ danh sách tài khoản load
     
     clicked = False
-    
-    if not clicked:
-        clicked = wait_and_click(driver, By.XPATH, "//span[contains(text(), 'Instagram')]")
+    try:
+        # Chiến thuật: Tìm tất cả các phần tử có vẻ là item tài khoản chứa chữ "Instagram"
+        # Ưu tiên các thẻ có role='button' hoặc 'link' hoặc class chứa item
+        # Lấy danh sách và click phần tử đầu tiên (index 0)
         
-    if not clicked:
-        clicked = wait_and_click(driver, By.XPATH, "//div[contains(text(), 'Instagram')]")
-
-    if not clicked:
-        # Tìm thẻ SVG (icon) nằm trong list
-        clicked = wait_and_click(driver, By.CSS_SELECTOR, "div[role='dialog'] svg")
-
-    if not clicked:
-        # Fallback cuối cùng: Click vào bất kỳ div nào có vẻ là item trong list
-        print("   [2FA] Thử click fallback...")
-        driver.execute_script("""
-            var elements = document.querySelectorAll('div[role="button"], div[class*="x1n2onr6"]');
-            for (var i = 0; i < elements.length; i++) {
-                if (elements[i].innerText.includes('Instagram')) {
-                    elements[i].click();
-                    break;
+        # 1. Tìm các element chứa text Instagram
+        # XPath này lấy các thẻ text 'Instagram' nằm trong nút bấm
+        xpath_items = "(//div[@role='button']//span[contains(text(), 'Instagram')] | //a//span[contains(text(), 'Instagram')] | //span[contains(text(), 'Instagram')][ancestor::div[@role='button']])"
+        
+        items = driver.find_elements(By.XPATH, xpath_items)
+        
+        for item in items:
+            if item.is_displayed():
+                print("   [2FA] Click vào tài khoản Instagram (Top list).")
+                try:
+                    item.click()
+                    clicked = True
+                    break
+                except:
+                    # Fallback JS click
+                    driver.execute_script("arguments[0].click();", item)
+                    clicked = True
+                    break
+        
+        # 2. Nếu chưa click được, thử tìm thô bằng JS (Tìm div role=button chứa text Instagram)
+        if not clicked:
+            print("   [2FA] Thử click fallback JS...")
+            driver.execute_script("""
+                var elements = document.querySelectorAll('div[role="button"], a[role="link"]');
+                for (var i = 0; i < elements.length; i++) {
+                    if (elements[i].innerText.includes('Instagram')) {
+                        elements[i].click();
+                        break; // Chỉ click cái đầu tiên
+                    }
                 }
-            }
-        """)
+            """)
+            
+    except Exception as e:
+        print(f"   [2FA] Lỗi khi chọn tài khoản: {e}")
 
-    time.sleep(5)
+    try:
+        WebDriverWait(driver, 8).until(
+            lambda d: "check your email" in d.page_source.lower() or "authentication app" in d.page_source.lower() or "is on" in d.page_source.lower()
+        )
+    except: time.sleep(2)
+    
     _raise_if_change_not_allowed_yet(driver)
 
     body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
     
+    # --- KIỂM TRA SỚM: ĐÃ BẬT 2FA CHƯA? ---
+    if "is on" in body_text or "đang bật" in body_text:
+         print("   [2FA] 2FA ĐÃ ĐƯỢC BẬT TỪ TRƯỚC -> DỪNG.")
+         raise Exception("ALREADY_2FA_ON")
+
     # Các từ khóa xuất hiện trong ảnh bạn gửi: "check your email", "enter the code"
     keywords = ["check your email", "enter the code", "nhập mã", "security code", "mã bảo mật"]
     
