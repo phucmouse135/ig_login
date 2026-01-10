@@ -9,10 +9,16 @@ from selenium.webdriver.support import expected_conditions as EC
 
 def wait_element(driver, by, value, timeout=10):
     """Hàm chờ element xuất hiện và trả về element đó"""
-    try:
-        return WebDriverWait(driver, timeout).until(EC.visibility_of_element_located((by, value)))
-    except:
-        return None
+    # Manual wait thay vì WebDriverWait
+    steps = int(timeout / 0.5)
+    for _ in range(steps):
+        try:
+            el = driver.find_element(by, value)
+            if el.is_displayed():
+                return el
+        except: pass
+        time.sleep(0.5)
+    return None
 
 
 def _find_rows_with_frame_search(driver):

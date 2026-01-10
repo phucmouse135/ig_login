@@ -23,54 +23,89 @@ def _raise_if_change_not_allowed_yet(driver):
         )
         print("   [2FA] ERROR: " + msg)
         raise RuntimeError(msg)
-def setup_2fa(driver, email, email_pass):
+def setup_2fa(driver, email, email_pass, target_username=None):
     """
     Thực hiện quy trình bật 2FA -> Lấy Key -> Confirm -> Trả về Key.
     """
-    print("   [2FA] Đang truy cập trang cài đặt 2FA...")
+    print(f"   [2FA] Đang truy cập trang cài đặt 2FA (Target: {target_username})...")
     driver.get("https://accountscenter.instagram.com/password_and_security/two_factor/")
     time.sleep(5) # Chờ load framework React
     _raise_if_change_not_allowed_yet(driver)
     
 
     # BƯỚC 1: CHỌN TÀI KHOẢN
-    print("   [2FA] Chọn tài khoản (Ưu tiên Instagram đầu tiên)...")
+    print("   [2FA] Chọn tài khoản...")
     time.sleep(3) # Chờ danh sách tài khoản load
     
     clicked = False
     try:
-        # Chiến thuật: Tìm tất cả các phần tử có vẻ là item tài khoản chứa chữ "Instagram"
-        # Ưu tiên các thẻ có role='button' hoặc 'link' hoặc class chứa item
-        # Lấy danh sách và click phần tử đầu tiên (index 0)
+        # LOGIC SELECT ACCOUNT UPDATED
+        # Tìm danh sách các nút (account items)
+        # Thông thường là div[role='button'] hoặc a[role='link']
         
-        # 1. Tìm các element chứa text Instagram
-        # XPath này lấy các thẻ text 'Instagram' nằm trong nút bấm
-        xpath_items = "(//div[@role='button']//span[contains(text(), 'Instagram')] | //a//span[contains(text(), 'Instagram')] | //span[contains(text(), 'Instagram')][ancestor::div[@role='button']])"
+        # 1. Tìm tất cả candidate elements
+        candidates = driver.find_elements(By.XPATH, "//div[@role='button'] | //a[@role='link']")
         
-        items = driver.find_elements(By.XPATH, xpath_items)
+        instagram_candidates = []
         
-        for item in items:
-            if item.is_displayed():
-                print("   [2FA] Click vào tài khoản Instagram (Top list).")
-                try:
-                    item.click()
-                    clicked = True
-                    break
-                except:
-                    # Fallback JS click
-                    driver.execute_script("arguments[0].click();", item)
-                    clicked = True
-                    break
+        # 2. Lọc danh sách candidate
+        for el in candidates:
+            try:
+                txt = el.text.lower()
+                # Chỉ xử lý nếu có chữ Instagram (bỏ qua Facebook)
+                if "instagram" in txt:
+                    instagram_candidates.append(el)
+            except: pass
+            
+        print(f"   [2FA] Tìm thấy {len(instagram_candidates)} tài khoản Instagram.")
         
-        # 2. Nếu chưa click được, thử tìm thô bằng JS (Tìm div role=button chứa text Instagram)
+        target_el = None
+        
+        if instagram_candidates:
+            # Nếu chỉ có 1 -> Chọn luôn
+            if len(instagram_candidates) == 1:
+                target_el = instagram_candidates[0]
+                print("   [2FA] Chỉ có 1 tài khoản Instagram. Chọn luôn.")
+            elif target_username:
+                # Nếu có nhiều, tìm cái nào chứa username
+                norm_target = target_username.strip().lower()
+                print(f"   [2FA] Đang tìm tài khoản khớp user '{norm_target}'...")
+                
+                for cand in instagram_candidates:
+                    if norm_target in cand.text.lower():
+                        target_el = cand
+                        print("   [2FA] => Đã tìm thấy khớp Username!")
+                        break
+                
+                # Nếu không tìm thấy khớp user -> fallback cái đầu tiên
+                if not target_el:
+                    print("   [2FA] Không thấy khớp Username. Fallback chọn cái đầu tiên.")
+                    target_el = instagram_candidates[0]
+            else:
+                # Không có target username -> chọn cái đầu
+                target_el = instagram_candidates[0]
+        
+        # 3. Click
+        if target_el:
+            try:
+                # Scroll to view
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", target_el)
+                time.sleep(1)
+                target_el.click()
+                clicked = True
+            except:
+                 driver.execute_script("arguments[0].click();", target_el)
+                 clicked = True
+        
+        # Fallback cũ nếu logic trên fail hoàn toàn
         if not clicked:
-            print("   [2FA] Thử click fallback JS...")
+            print("   [2FA] Fallback JS Selection cu...")
             driver.execute_script("""
                 var elements = document.querySelectorAll('div[role="button"], a[role="link"]');
                 for (var i = 0; i < elements.length; i++) {
                     if (elements[i].innerText.includes('Instagram')) {
                         elements[i].click();
-                        break; // Chỉ click cái đầu tiên
+                        break; 
                     }
                 }
             """)
@@ -78,13 +113,32 @@ def setup_2fa(driver, email, email_pass):
     except Exception as e:
         print(f"   [2FA] Lỗi khi chọn tài khoản: {e}")
 
-    try:
-        WebDriverWait(driver, 8).until(
-            lambda d: "check your email" in d.page_source.lower() or "authentication app" in d.page_source.lower() or "is on" in d.page_source.lower()
-        )
-    except: time.sleep(2)
+    # Đợi manual check thay vì WebDriverWait
+    print("   [2FA] Đang đợi màn hình tiếp theo load...")
+    found_step = False
+    for _ in range(20): # Đợi khoảng 20s
+        src = driver.page_source.lower()
+        if "check your email" in src or "authentication app" in src or "is on" in src:
+            found_step = True
+            break
+        time.sleep(1)
+        
+    if not found_step:
+        print("   [2FA] Cảnh báo: Hết thời gian chờ màn hình tiếp theo.")
     
     _raise_if_change_not_allowed_yet(driver)
+
+    # Cập nhật context màn hình hiện tại
+    try:
+        # Check kỹ các thẻ Header H2, H1 trong modal (Thường popup IG dùng h2 hoặc div role=heading)
+        headers = driver.find_elements(By.TAG_NAME, "h2")
+        for h in headers:
+            txt = h.text.lower()
+            if "authentication is on" in txt or "đang bật" in txt:
+                 print("   [2FA] Phát hiện popup: Two-factor authentication is on.")
+                 raise Exception("ALREADY_2FA_ON")
+    except Exception as e:
+        if str(e) == "ALREADY_2FA_ON": raise e
 
     body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
     

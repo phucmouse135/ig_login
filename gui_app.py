@@ -14,7 +14,7 @@ class Instagram2FAToolApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Tool Auto 2FA Instagram - Pro GUI")
-        self.root.geometry("1000x700")
+        self.root.geometry("1400x800") # Mở rộng to hơn vì nhiều cột
 
         # --- Variables ---
         self.file_path = "input.txt" # Default
@@ -23,7 +23,13 @@ class Instagram2FAToolApp:
         self.executor = None
         self.stop_event = threading.Event()
         self.results_lock = threading.Lock()
-
+        
+        # Stats
+        self.total_input = 0
+        self.running_count = 0
+        self.success_count = 0
+        self.processed_count = 0
+        
         # --- UI Layout ---
         self.setup_top_controls()
         self.setup_tables()
@@ -33,80 +39,90 @@ class Instagram2FAToolApp:
         frame = ttk.LabelFrame(self.root, text="Cấu hình & Điều khiển", padding=10)
         frame.pack(fill="x", padx=10, pady=5)
 
-        # File Input
-        ttk.Label(frame, text="File Input:").grid(row=0, column=0, padx=5, sticky="w")
+        # Row 0: File Input & Data Loading
+        ttk.Label(frame, text="File Input (Không bắt buộc):").grid(row=0, column=0, padx=5, sticky="w")
         self.entry_file = ttk.Entry(frame, width=40)
         self.entry_file.insert(0, self.file_path)
         self.entry_file.grid(row=0, column=1, padx=5)
         ttk.Button(frame, text="Chọn File", command=self.browse_file).grid(row=0, column=2, padx=5)
         ttk.Button(frame, text="Load Data", command=self.load_data).grid(row=0, column=3, padx=5)
+        ttk.Button(frame, text="Nhập bộ thủ công", command=self.open_manual_input).grid(row=0, column=4, padx=5)
 
-        # Threads
-        ttk.Label(frame, text="Số luồng:").grid(row=0, column=4, padx=(20, 5))
-        self.spin_threads = ttk.Spinbox(frame, from_=1, to=20, width=5)
-        self.spin_threads.set(1)
-        self.spin_threads.grid(row=0, column=5, padx=5)
-
-        # Control Buttons
-        self.btn_start = ttk.Button(frame, text="▶ BẮT ĐẦU", command=self.start_process)
-        self.btn_start.grid(row=0, column=6, padx=10)
+        # Row 1: Running Controls & Stats
+        frame_run = ttk.Frame(frame)
+        frame_run.grid(row=1, column=0, columnspan=10, sticky="w", pady=10)
         
-        self.btn_stop = ttk.Button(frame, text="⏹ DỪNG LẠI", command=self.stop_process, state="disabled")
-        self.btn_stop.grid(row=0, column=7, padx=5)
+        ttk.Label(frame_run, text="Số luồng:").pack(side="left", padx=(5, 5))
+        self.spin_threads = ttk.Spinbox(frame_run, from_=1, to=50, width=5)
+        self.spin_threads.set(1)
+        self.spin_threads.pack(side="left", padx=5)
+
+        self.btn_start = ttk.Button(frame_run, text="▶ BẮT ĐẦU", command=self.start_process)
+        self.btn_start.pack(side="left", padx=10)
+        
+        self.btn_stop = ttk.Button(frame_run, text="⏹ DỪNG LẠI", command=self.stop_process, state="disabled")
+        self.btn_stop.pack(side="left", padx=5)
+        
+        # Checkbox Chạy Ẩn
+        self.var_headless = tk.BooleanVar(value=False)
+        self.chk_headless = ttk.Checkbutton(frame_run, text="Chạy Ẩn", variable=self.var_headless)
+        self.chk_headless.pack(side="left", padx=10)
+        
+        # Stats Labels
+        ttk.Separator(frame_run, orient="vertical").pack(side="left", fill="y", padx=10)
+        
+        self.lbl_progress = ttk.Label(frame_run, text="Tiến trình: 0/0", font=("Arial", 9, "bold"))
+        self.lbl_progress.pack(side="left", padx=10)
+        
+        self.lbl_running = ttk.Label(frame_run, text="Đang chạy: 0", foreground="blue")
+        self.lbl_running.pack(side="left", padx=10)
+        
+        self.lbl_success = ttk.Label(frame_run, text="Thành công: 0", foreground="green")
+        self.lbl_success.pack(side="left", padx=10)
 
     def setup_tables(self):
-        # PanedWindow để chia 2 phần (Input và Output)
-        paned = ttk.PanedWindow(self.root, orient="vertical")
-        paned.pack(fill="both", expand=True, padx=10, pady=5)
+        # Frame chính cho bảng
+        frame_main = ttk.Frame(self.root)
+        frame_main.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # --- Bảng Input ---
-        frame_input = ttk.LabelFrame(paned, text="Danh sách tài khoản (Input)", padding=5)
-        paned.add(frame_input, weight=2)
-
-        cols_in = ("ID", "Username", "Password", "Email", "Status")
-        self.tree_input = ttk.Treeview(frame_input, columns=cols_in, show="headings", height=10)
+        # ==========================================
+        # BẢNG INPUT (GIỜ LÀ BẢNG CHÍNH)
+        # ==========================================
+        frame_input = ttk.LabelFrame(frame_main, text="Danh sách tài khoản", padding=5)
+        frame_input.pack(fill="both", expand=True)
         
-        # Heading & Column setup
-        self.tree_input.heading("ID", text="#")
-        self.tree_input.column("ID", width=40, anchor="center")
-        self.tree_input.heading("Username", text="Username")
-        self.tree_input.column("Username", width=150)
-        self.tree_input.heading("Password", text="Password")
-        self.tree_input.column("Password", width=100)
-        self.tree_input.heading("Email", text="Email")
-        self.tree_input.column("Email", width=200)
-        self.tree_input.heading("Status", text="Trạng thái")
-        self.tree_input.column("Status", width=150)
+        # Toolbar Input
+        tb_input = ttk.Frame(frame_input)
+        tb_input.pack(side="top", fill="x", pady=2)
+        ttk.Button(tb_input, text="Xóa dòng chọn", command=self.delete_selected_input).pack(side="left", padx=2)
+        ttk.Button(tb_input, text="Xóa toàn bộ", command=self.delete_all_input).pack(side="left", padx=2)
+        
+        # Moved Export buttons here
+        ttk.Separator(tb_input, orient="vertical").pack(side="left", fill="y", padx=5)
+        ttk.Button(tb_input, text="Xuất Thành Công", command=self.export_success).pack(side="left", padx=2)
+        ttk.Button(tb_input, text="Xuất Thất Bại", command=self.export_fail).pack(side="left", padx=2)
 
-        scroll_in = ttk.Scrollbar(frame_input, orient="vertical", command=self.tree_input.yview)
-        self.tree_input.configure(yscroll=scroll_in.set)
+        # Định nghĩa cột
+        self.cols_def = ["ID", "User", "PASS", "2FA", "Email", "Pass Email", "Post", "Followers", "Following", "COOKIE", "Note"]
+        
+        self.tree_input = ttk.Treeview(frame_input, columns=self.cols_def, show="headings", height=20)
+        
+        # Config Columns
+        col_widths = [40, 120, 100, 100, 180, 100, 50, 70, 70, 100, 200]
+        for i, col in enumerate(self.cols_def):
+            self.tree_input.heading(col, text=col)
+            self.tree_input.column(col, width=col_widths[i], anchor="w")
+        self.tree_input.column("ID", anchor="center")
+
+        scroll_in_y = ttk.Scrollbar(frame_input, orient="vertical", command=self.tree_input.yview)
+        scroll_in_x = ttk.Scrollbar(frame_input, orient="horizontal", command=self.tree_input.xview)
+        self.tree_input.configure(yscroll=scroll_in_y.set, xscroll=scroll_in_x.set)
         
         self.tree_input.pack(side="left", fill="both", expand=True)
-        scroll_in.pack(side="right", fill="y")
+        scroll_in_y.pack(side="right", fill="y")
+        scroll_in_x.pack(side="bottom", fill="x")
 
-        # --- Bảng Output ---
-        frame_output = ttk.LabelFrame(paned, text="Kết quả xử lý (Output)", padding=5)
-        paned.add(frame_output, weight=1)
-
-        cols_out = ("Time", "Username", "Result", "Message")
-        self.tree_output = ttk.Treeview(frame_output, columns=cols_out, show="headings", height=8)
-        
-        self.tree_output.heading("Time", text="Giờ")
-        self.tree_output.column("Time", width=80)
-        self.tree_output.heading("Username", text="Username")
-        self.tree_output.column("Username", width=150)
-        self.tree_output.heading("Result", text="Kết quả")
-        self.tree_output.column("Result", width=250)
-        self.tree_output.heading("Message", text="Chi tiết")
-        self.tree_output.column("Message", width=300)
-
-        scroll_out = ttk.Scrollbar(frame_output, orient="vertical", command=self.tree_output.yview)
-        self.tree_output.configure(yscroll=scroll_out.set)
-
-        self.tree_output.pack(side="left", fill="both", expand=True)
-        scroll_out.pack(side="right", fill="y")
-        
-        # Tag configuration for validation colors
+        # Tag configuration
         self.tree_input.tag_configure("pending", background="white")
         self.tree_input.tag_configure("running", background="#fffacd") # Vàng nhạt
         self.tree_input.tag_configure("success", background="#e0ffe0") # Xanh nhạt
@@ -126,41 +142,148 @@ class Instagram2FAToolApp:
 
     def load_data(self):
         # Clear cũ
-        for item in self.tree_input.get_children():
-            self.tree_input.delete(item)
-            
+        self.delete_all_input()
+        
         path = self.entry_file.get()
         try:
             with open(path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
-            
-            count = 0
-            for line in lines:
-                line = line.strip()
-                if not line: continue
-                parts = line.split("\t")
-                if len(parts) >= 5:
-                    # columns=("ID", "Username", "Password", "Email", "Status")
-                    username = parts[0]
-                    password = parts[1] # Thường là pass IG
-                    email = parts[3]
-                    
-                    # Store full line data in hidden values or manage externally
-                    # IID sẽ là index của row để dễ truy xuất
-                    self.tree_input.insert("", "end", iid=str(count), values=(count+1, username, password, email, "Chờ chạy"), tags=("pending",))
-                    
-                    # Lưu data gốc vào dictionary để thread lấy ra dùng
-                    if not hasattr(self, 'data_map'): self.data_map = {}
-                    self.data_map[str(count)] = line
-                    
-                    count += 1
-            
-            self.status_var.set(f"Đã load {count} dòng.")
+            self._parse_and_add_lines(lines)
         except Exception as e:
             messagebox.showerror("Lỗi load file", str(e))
 
+    def open_manual_input(self):
+        # Tạo popup window
+        top = tk.Toplevel(self.root)
+        top.title("Nhập dữ liệu thủ công")
+        top.geometry("700x500")
+        
+        lbl_hint = ttk.Label(top, text="Dán dữ liệu theo định dạng (Tab separated):\nUser | Pass | 2FA | Email | PassMail | Post | Flwer | Flwing | Cookie", justify="left")
+        lbl_hint.pack(anchor="w", padx=10, pady=5)
+        
+        txt_input = tk.Text(top, height=20)
+        txt_input.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # Sample placeholder
+        txt_input.insert("1.0", "# Ví dụ:\nusername\tpassword\t\temail@mail.com\tmailpass\t0\t0\t0\tcookie_string...")
+        
+        def _confirm():
+            content = txt_input.get("1.0", tk.END)
+            # Filter comments
+            lines = [l for l in content.split("\n") if l.strip() and not l.strip().startswith("#")]
+            self._parse_and_add_lines(lines)
+            top.destroy()
+            
+        ttk.Button(top, text="Thêm vào danh sách", command=_confirm).pack(pady=10)
+
+
+    def _parse_and_add_lines(self, lines):
+        count = len(self.tree_input.get_children())
+        if not hasattr(self, 'data_map'): self.data_map = {}
+        
+        for line in lines:
+            line = line.strip()
+            if not line: continue
+            parts = line.split("\t")
+            
+            # Chuẩn hóa độ dài list
+            while len(parts) < 9: parts.append("")
+            
+            # Mapping: User[0], Pass[1], 2FA[2], Email[3], PassEmail[4], Post[5], Follow[6], Following[7], Cookie[8]
+            username = parts[0]
+            
+            row_vals = [
+                count + 1,
+                parts[0], # User
+                parts[1], # Pass
+                parts[2], # 2FA (ban đầu thường trống)
+                parts[3], # Email
+                parts[4], # EAPass
+                parts[5], # Post
+                parts[6], # Follower
+                parts[7], # Following
+                parts[8], # Cookie
+                "Chờ chạy" # Note
+            ]
+            
+            # Insert vào input table
+            iid = str(count)
+            self.tree_input.insert("", "end", iid=iid, values=row_vals, tags=("pending",))
+            
+            # Lưu raw data để xử lý
+            self.data_map[iid] = parts
+            count += 1
+            
+        self.total_input = count
+        self.update_progress_ui()
+        self.status_var.set(f"Đã load tổng {count} dòng.")
+
+    def delete_selected_input(self):
+        selected_items = self.tree_input.selection()
+        for iid in selected_items:
+            self.tree_input.delete(iid)
+            if iid in self.data_map:
+                del self.data_map[iid]
+        self.total_input = len(self.tree_input.get_children())
+        self.update_progress_ui()
+
+    def delete_all_input(self):
+        for item in self.tree_input.get_children():
+            self.tree_input.delete(item)
+        self.data_map = {}
+        self.total_input = 0
+        self.update_progress_ui()
+
+    def export_success(self):
+        self._export_generic("success", "SUCCESS")
+
+    def export_fail(self):
+        self._export_generic("fail", "FAIL")
+
+    def _export_generic(self, tag_filter, suffix):
+        try:
+            filename = f"output_{suffix}_{int(time.time())}.txt"
+            f = filedialog.asksaveasfilename(
+                initialfile=filename,
+                defaultextension=".txt", 
+                filetypes=[("Text Files", "*.txt")]
+            )
+            if not f: return
+            
+            count = 0
+            with open(f, "w", encoding="utf-8") as file:
+                # Write header
+                headers = "\t".join(self.cols_def)
+                file.write(headers + "\n")
+                
+                # Write rows matching tag from INPUT TABLE
+                for child in self.tree_input.get_children():
+                    tags = self.tree_input.item(child)["tags"]
+                    # Check tag (tag_filter in tags)
+                    if tag_filter in tags:
+                        vals = self.tree_input.item(child)["values"]
+                        line = "\t".join([str(v) for v in vals])
+                        file.write(line + "\n")
+                        count += 1
+            
+            messagebox.showinfo("Thành công", f"Đã xuất {count} dòng {suffix}!")
+        except Exception as e:
+            messagebox.showerror("Lỗi", str(e))
+
+    def update_progress_ui(self):
+        self.lbl_progress.config(text=f"Tiến trình: {self.processed_count}/{self.total_input}")
+        self.lbl_running.config(text=f"Đang chạy: {self.running_count}")
+        self.lbl_success.config(text=f"Thành công: {self.success_count}")
+
     def start_process(self):
         if self.is_running: return
+        
+        # Reset counts for new run session (optional, or keep accumulating?)
+        # Let's reset session counters but keep total
+        self.processed_count = 0
+        self.success_count = 0
+        self.running_count = 0
+        self.update_progress_ui()
         
         # Get pending items
         items = self.tree_input.get_children()
@@ -176,17 +299,20 @@ class Instagram2FAToolApp:
         self.btn_stop.config(state="normal")
         self.status_var.set(f"Đang chạy với {threads_count} luồng...")
 
+        # Lưu trạng thái Headless cho phiên chạy này để các thread con sử dụng
+        self.current_headless_mode = self.var_headless.get()
+
         # Reset queue
         self.task_queue = queue.Queue()
         for iid in items:
-            # Chỉ add những dòng chưa chạy hoặc chạy lỗi muốn chạy lại? 
-            # Hiện tại add tất cả dòng có status "Chờ chạy" hoặc muốn chạy lại hết thì tùy logic
-            # Ở đây mình sẽ duyệt từ đầu, bỏ qua những cái đã "Success"
-            curr_status = self.tree_input.item(iid, "values")[4]
-            if "Thành công" not in curr_status: # Chạy cả pending và error
+            # Chỉ chạy những dòng chưa hoàn thành
+            curr_vals = self.tree_input.item(iid, "values")
+            # Note is index 10
+            status_note = curr_vals[10]
+            if "Thành công" not in status_note:
                 self.task_queue.put(iid)
 
-        # Start Workers in a separate background thread to manage ThreadPool
+        # Start Workers
         threading.Thread(target=self.run_thread_pool, args=(threads_count,), daemon=True).start()
 
     def run_thread_pool(self, max_workers):
@@ -200,102 +326,142 @@ class Instagram2FAToolApp:
                 except queue.Empty:
                     break
             
-            # Wait for all submitted tasks
             for f in futures:
                 if self.stop_event.is_set(): break
-                f.result() # Wait
+                f.result() 
         
         self.root.after(0, self.on_finish)
 
     def process_one_account(self, iid):
         if self.stop_event.is_set(): return
         
-        line_data = self.data_map.get(iid)
-        parts = line_data.split('\t')
-        username = parts[0]
-        email = parts[3]
-        email_pass = parts[4]
-        cookie_str = parts[-1]
-
-        # Update running status UI
+        # Start Running
+        self.running_count += 1
+        self.root.after(0, self.update_progress_ui)
         self.update_input_status(iid, "Đang chạy...", "running")
         
+        # Get Data from map
+        raw_parts = self.data_map.get(iid)
+        # Mapping: User[0], Pass[1], 2FA[2], Email[3], PassEmail[4], Post[5], Follow[6], Following[7], Cookie[8]
+        username = raw_parts[0]
+        email = raw_parts[3]
+        email_pass = raw_parts[4]
+        cookie_str = raw_parts[8].strip()
+
         driver = None
-        result_key = ""
+        result_2fa = ""
         status_msg = ""
         is_success = False
 
         try:
-            # 1. Init Driver
-            driver = get_driver(headless=False)
+            # 1. Login Logic
+            # Lấy trạng thái Headless từ GUI (Thread Safe - truy cập variable cần cẩn thận hoặc lấy từ start)
+            # Tuy nhiên tk.BooleanVar không thread-safe lắm nhưng đọc 1 lần thường ok.
+            # Tốt nhất là pass value vào function process_one_account
+            # Nhưng ở đây self.var_headless.get() trong thread con có thể lỗi ở strict mode của Tkinter.
+            # -> Sửa lại: Lấy value ở hàm start_process rồi pass vào process_one_account
+            # Hoặc dùng self.root.tk.call để lấy?
+            # Đơn giản nhất: Do var_headless ít thay đổi khi đang chạy, ta lấy giá trị hiện tại.
+            # Lưu ý: Tkinter Variable .get() chỉ nên gọi ở Main Thread.
             
-            # 2. Login
+            # Giải pháp: Sẽ sửa hàm start_process để lấy giá trị headless và lưu vào self.current_headless_mode
+            is_headless = getattr(self, 'current_headless_mode', False)
+            
+            driver = get_driver(headless=is_headless)
+            
             if login_instagram_via_cookie(driver, cookie_str):
-                # 3. Setup 2FA
-                secret_key = setup_2fa(driver, email, email_pass)
+                # 2. Setup 2FA Logic
+                # Pass username để chọn đúng dòng nếu có nhiều tài khoản
+                secret_key = setup_2fa(driver, email, email_pass, target_username=username)
                 
-                result_key = secret_key
+                result_2fa = secret_key
                 status_msg = "Thành công"
                 is_success = True
             else:
-                status_msg = "Login Failed (Cookie Die)"
-                result_key = "LOGIN_FAIL"
+                status_msg = "Cookie Die/Login Fail"
+                result_2fa = "FAIL"
                 
         except Exception as e:
-            status_msg = str(e).replace("\n", " ")
-            result_key = f"ERROR: {status_msg}"
+            status_msg = f"Lỗi: {e}"
+            # Clean msg
+            status_msg = status_msg.replace("\n", " ")[:50] # Shorten
+            result_2fa = "ERROR"
         finally:
             if driver:
                 try: driver.quit()
                 except: pass
 
-        # Update Final Status UI
+        # Update Counters
+        self.running_count -= 1
+        self.processed_count += 1
+        if is_success: self.success_count += 1
+        self.root.after(0, self.update_progress_ui)
+
+        # Update Input UI: Fill 2FA column (index 2) and Note (index 10)
         tag = "success" if is_success else "fail"
-        self.update_input_status(iid, status_msg, tag)
+        self.update_input_row_result(iid, result_2fa, status_msg, tag)
         
         # Add to Output
-        timestamp = time.strftime("%H:%M:%S")
-        self.add_output_row(timestamp, username, result_key, status_msg)
-
-        # Write to File directly (Thread safe Logic)
-        self.write_to_output_file(parts, result_key)
-
-    def write_to_output_file(self, parts, result):
-        with self.results_lock:
-            while len(parts) <= 2: parts.append("")
-            parts[2] = result
-            final_line = "\t".join(parts) + "\n"
-            try:
-                with open("output.txt", "a", encoding="utf-8") as f:
-                    f.write(final_line)
-            except: pass
+        # self.add_output_row(iid, result_2fa, status_msg, tag)
 
     def update_input_status(self, iid, status_text, tag):
-        # Helper to update Treeview safely from thread
         def _update():
-            # Check if item exists (in case cleared)
             if self.tree_input.exists(iid):
                 vals = list(self.tree_input.item(iid, "values"))
-                vals[4] = status_text
+                vals[10] = status_text # Note column
                 self.tree_input.item(iid, values=vals, tags=(tag,))
-                # Auto scroll to current
                 self.tree_input.see(iid)
         self.root.after(0, _update)
 
-    def add_output_row(self, time_str, username, res, msg):
+    def update_input_row_result(self, iid, fa_code, note, tag):
+        def _update():
+            if self.tree_input.exists(iid):
+                vals = list(self.tree_input.item(iid, "values"))
+                vals[3] = fa_code   # Update 2FA Column (Index 3: ID, User, Pass, 2FA)
+                vals[10] = note     # Update Note
+                self.tree_input.item(iid, values=vals, tags=(tag,))
+        self.root.after(0, _update)
+
+    def add_output_row(self, iid_ref, fa_code, note, tag):
+        # Lấy data gốc và update kết quả để đưa sang output
+        raw_parts = list(self.data_map.get(iid_ref))
+        # Update part 2FA (index 2) if successful
+        if fa_code and fa_code != "FAIL" and fa_code != "ERROR":
+            raw_parts[2] = fa_code
+            
+        # Create row values
+        # "ID", "User", "PASS", "2FA", "Email", "Pass Email", "Post", "Followers", "Following", "COOKIE", "Note"
+        # Input 'raw_parts' length is 9 (0-8). Note is extra. ID is generated.
+        
+        # Lấy STT tương ứng với input. iid_ref là string index 0-based.
+        # ID hiển thị = iid_ref + 1
+        display_id = int(iid_ref) + 1
+        
+        row_vals = [
+            display_id,
+            raw_parts[0],
+            raw_parts[1],
+            raw_parts[2], # updated 2FA
+            raw_parts[3],
+            raw_parts[4],
+            raw_parts[5],
+            raw_parts[6],
+            raw_parts[7],
+            raw_parts[8],
+            note
+        ]
+        
         def _add():
-            self.tree_output.insert("", 0, values=(time_str, username, res, msg))
+            self.tree_output.insert("", 0, values=row_vals, tags=(tag,))
         self.root.after(0, _add)
 
     def stop_process(self):
         if not self.is_running: return
         if messagebox.askyesno("Xác nhận", "Bạn có muốn dừng tiến trình?"):
             self.stop_event.set()
-            # Clear queue
             with self.task_queue.mutex:
                 self.task_queue.queue.clear()
             self.status_var.set("Đang dừng... Đợi các luồng hiện tại hoàn tất.")
-            # Interface sẽ được reset ở on_finish
 
     def on_finish(self):
         self.is_running = False
