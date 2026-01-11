@@ -100,7 +100,7 @@ class Instagram2FAToolApp:
         # Moved Export buttons here
         ttk.Separator(tb_input, orient="vertical").pack(side="left", fill="y", padx=5)
         ttk.Button(tb_input, text="Xuất Thành Công", command=self.export_success).pack(side="left", padx=2)
-        ttk.Button(tb_input, text="Xuất Thất Bại", command=self.export_fail).pack(side="left", padx=2)
+        ttk.Button(tb_input, text="Xuất No Success", command=self.export_fail).pack(side="left", padx=2)
 
         # Định nghĩa cột
         self.cols_def = ["ID", "User", "PASS", "2FA", "Email", "Pass Email", "Post", "Followers", "Following", "COOKIE", "Note"]
@@ -235,12 +235,14 @@ class Instagram2FAToolApp:
         self.update_progress_ui()
 
     def export_success(self):
-        self._export_generic("success", "SUCCESS")
+        # Xuất những dòng có tag 'success'
+        self._export_data(lambda tags: "success" in tags, "SUCCESS")
 
     def export_fail(self):
-        self._export_generic("fail", "FAIL")
+        # Xuất những dòng KHÔNG có tag 'success' (bao gồm pending, fail, running...)
+        self._export_data(lambda tags: "success" not in tags, "NO_SUCCESS")
 
-    def _export_generic(self, tag_filter, suffix):
+    def _export_data(self, condition_func, suffix):
         try:
             filename = f"output_{suffix}_{int(time.time())}.txt"
             f = filedialog.asksaveasfilename(
@@ -252,17 +254,21 @@ class Instagram2FAToolApp:
             
             count = 0
             with open(f, "w", encoding="utf-8") as file:
-                # Write header
-                headers = "\t".join(self.cols_def)
-                file.write(headers + "\n")
+                # Không ghi header
                 
-                # Write rows matching tag from INPUT TABLE
+                # Write rows matching condition
                 for child in self.tree_input.get_children():
                     tags = self.tree_input.item(child)["tags"]
-                    # Check tag (tag_filter in tags)
-                    if tag_filter in tags:
+                    
+                    if condition_func(tags):
                         vals = self.tree_input.item(child)["values"]
-                        line = "\t".join([str(v) for v in vals])
+                        
+                        # TreeView: ID[0], User[1], Pass[2], 2FA[3], Email[4], PassEmail[5], Post[6], Follow[7], Following[8], Cookie[9], Note[10]
+                        # Input cần (9 col): User ... Cookie 
+                        # -> slice [1:10] (tức index 1 đến 9)
+                        
+                        export_vals = vals[1:10] 
+                        line = "\t".join([str(v) for v in export_vals])
                         file.write(line + "\n")
                         count += 1
             

@@ -144,32 +144,59 @@ def _describe_row_brief(row) -> str:
 def _click_mail_row(driver, row) -> None:
     """Click vào mail để mở (tránh checkbox/star)"""
     try:
-        # Scroll
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'center'});", row)
+        # Scroll - sử dụng block 'nearest' để đỡ bị trượt quá đà
+        driver.execute_script("arguments[0].scrollIntoView({block: 'nearest', inline: 'nearest'});", row)
         time.sleep(1)
         
-        # Tìm vùng an toàn để click (Subject hoặc Date hoặc fallback là td.last)
+        # Chiến thuật click mới: Cố gắng click vào phần Subject (an toàn nhất)
+        # Nếu không có, click vào td chứa subject
         target = None
+        
+        # 1. Tìm thẻ subject cụ thể
         try:
-            target = row.find_element(By.CSS_SELECTOR, ".subject")
-        except:
+            target = row.find_element(By.CSS_SELECTOR, "span.subject")
+        except: pass
+            
+        # 2. Nếu không thấy, tìm td chứa subject
+        if not target:
             try:
-                target = row.find_element(By.CSS_SELECTOR, ".date")
-            except:
-                try:
-                    target = row.find_element(By.CSS_SELECTOR, "td.last")
-                except:
-                    target = row # Fallback row
+                target = row.find_element(By.CSS_SELECTOR, "td.subject")
+            except: pass
+            
+        # 3. Fallback: Cell date
+        if not target:
+             try:
+                target = row.find_element(By.CSS_SELECTOR, "div.date")
+             except: pass
+             
+        # 4. Fallback cuối: Row
+        if not target: target = row
         
-        # Click bằng JS (mạnh nhất)
-        driver.execute_script("arguments[0].click();", target)
+        print(f"   [Mail] Target click: {target.tag_name} (Text: {target.text[:20]}...)")
         
-        # Fallback ActionChains
+        # Thực hiện click robust
+        clicked = False
+        
+        # Thử JS Click first (Độ ổn định cao nhất cho mail client)
         try:
-            ActionChains(driver).move_to_element(target).click().perform()
+            driver.execute_script("arguments[0].click();", target)
+            print("   [Mail] Click JS Done.")
+            clicked = True
         except: pass
         
-        print("   [Mail] Đã thực hiện click mở mail.")
+        if not clicked:
+            try:
+                target.click()
+                print("   [Mail] Click Thường Done.")
+            except: 
+                try:
+                    ActionChains(driver).move_to_element(target).click().perform()
+                    print("   [Mail] Click ActionChains Done.")
+                except:
+                    print("   [Mail] Click Fail All Methods.")
+        
+        time.sleep(1)
+
     except Exception as e:
         print(f"   [Mail] Warning click row: {e}")
 
@@ -291,8 +318,16 @@ def get_code_from_mail(driver, email, password):
             try:
                 print(f"   [Mail] Lần quét {i+1}...")
                 driver.switch_to.default_content()
+                
+                # REFRESH PAGE LOGIC ROBUST
                 driver.refresh()
-                time.sleep(5)
+                # Chờ load xong
+                try:
+                    WebDriverWait(driver, 15).until(
+                        lambda d: d.execute_script('return document.readyState') == 'complete'
+                    )
+                except: pass
+                time.sleep(5) # Thêm thời gian chờ cứng để load AJAX mail list
 
                 # --- LOGIC MỚI: DUYỆT TABLE TÌM UNREAD MAIL ---
                 target_row = _find_target_mail_row(driver, target_subject)
@@ -303,7 +338,11 @@ def get_code_from_mail(driver, email, password):
 
                 # Click mở mail
                 _click_mail_row(driver, target_row)
-                time.sleep(5) # Chờ load nội dung mail
+                
+                # Check xem đã mở mail chưa (Check xem list có bị ẩn hay nội dung có hiện lên chưa?)
+                # Hoặc đơn giản là chờ lâu hơn chút
+                print("   [Mail] Đang đợi nội dung mail load...")
+                time.sleep(8) 
 
                 # --- LOGIC MỚI: TÌM KIẾM ĐỆ QUY & TRÍCH XUẤT TRỰC TIẾP ---
                 def _attempt_extract_in_current_frame(drv):

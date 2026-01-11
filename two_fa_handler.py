@@ -251,8 +251,40 @@ def setup_2fa(driver, email, email_pass, target_username=None):
 
     print(f"   [2FA] Key tìm thấy: {secret_key}")
     
-    # Nhấn Next để sang bước nhập OTP
-    wait_and_click(driver, By.XPATH, "//div[@role='button']//span[contains(text(), 'Next') or contains(text(), 'Tiếp')]")
+    # --- PROMOTED HELPER ---
+    def robust_click(xpath_list, description):
+        for xpath in xpath_list:
+            try:
+                els = driver.find_elements(By.XPATH, xpath)
+                for el in els:
+                    if el.is_displayed():
+                        driver.execute_script("arguments[0].style.border='3px solid red'", el)
+                        time.sleep(0.2)
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+                        time.sleep(0.5)
+                        try: el.click()
+                        except: driver.execute_script("arguments[0].click();", el)
+                        print(f"   [2FA] Đã click {description}")
+                        return True
+            except: pass
+        return False
+
+    # --- CLICK NEXT (SAU KHI LẤY KEY) ---
+    print("   [2FA] Nhấn Next để sang bước nhập OTP...")
+    next_step_xpaths = [
+        "//span[text()='Next']", "//span[text()='Tiếp']",
+        "//div[@role='button']//span[contains(text(), 'Next')]",
+        "//div[@role='button']//span[contains(text(), 'Tiếp')]",
+        "//button[contains(text(), 'Next')]",
+        "//button[contains(text(), 'Tiếp')]",
+        "//span[contains(text(), 'Next')]", # Fallback loose
+        "//span[contains(text(), 'Tiếp')]"
+    ]
+    
+    if not robust_click(next_step_xpaths, "Next (Step 4)"):
+         print("   [2FA] Warning: Không click được Next bằng Robust. Thử fallback wait_and_click cũ...")
+         wait_and_click(driver, By.XPATH, "//div[@role='button']//span[contains(text(), 'Next') or contains(text(), 'Tiếp')]")
+
     time.sleep(3)
 
     # BƯỚC 5: TẠO OTP VÀ CONFIRM
@@ -267,52 +299,323 @@ def setup_2fa(driver, email, email_pass, target_username=None):
     print(f"   [2FA] OTP Code generated: {otp_code}")
     print("   [2FA] Lưu ý: Nếu OTP sai, hãy đồng bộ lại giờ hệ thống (Time Sync)!")
     
-    # Nhập OTP
-    wait_and_send_keys(driver, By.CSS_SELECTOR, "input[type='text'], input[type='number']", otp_code)
-    time.sleep(2)
+    # --- NHẬP OTP (ROBUST) ---
+    print(f"   [2FA] Đang nhập OTP: {otp_code}")
+    entered_otp = False
+    target_input = None
     
-    # Nhấn Next (Cập nhật XPath mới dựa trên HTML user cung cấp)
-    # HTML: ... <span><span>Next</span></span> ...
-    print("   [2FA] Nhấn Next để xác nhận OTP...")
-    xpath_next_otp = "//span[text()='Next' or text()='Tiếp']"
-    clicked_next = False
-    
+    # 0. CHIẾN THUẬT AUTO-FOCUS + KEYBOARD ACTIONS (Mạnh nhất cho IG Modal)
     try:
-        # Tìm element Next
-        els = driver.find_elements(By.XPATH, xpath_next_otp)
-        for el in els:
-            if el.is_displayed():
-                el.click()
-                clicked_next = True
-                break
-    except: pass
-    
-    # Fallback nếu cách trên không được
-    if not clicked_next:
-         wait_and_click(driver, By.XPATH, "//div[@role='button']//span[contains(text(), 'Next') or contains(text(), 'Tiếp')]")
-         
-    time.sleep(5)
-    
-    print("   [2FA] Xác nhận hoàn tất.")
-    
-    # Nhấn Done (Cập nhật XPath mới cho Done)
-    # HTML: ... <span><span>Done</span></span> ...
-    print("   [2FA] Nhấn Done...")
-    xpath_done = "//span[text()='Done' or text()='Xong']"
-    clicked_done = False
-    
-    try:
-        els = driver.find_elements(By.XPATH, xpath_done)
-        for el in els:
-            if el.is_displayed():
-                el.click()
-                clicked_done = True
-                break
-    except: pass
+        # Danh sách selector tiềm năng (ưu tiên placeholder và maxlength)
+        potential_selectors = [
+            "input[maxlength='6']", 
+            "input[placeholder='Enter code']", 
+            "input[placeholder='Code']",
+            "input[aria-label='Code']",
+            "input[aria-label='Security Code']"
+        ]
+        
+        # 1. Tìm input tốt nhất
+        for sel in potential_selectors:
+            try:
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                for el in els:
+                    if el.is_displayed():
+                        target_input = el
+                        print(f"   [2FA] Tìm thấy input bằng selector: {sel}")
+                        break
+            except: pass
+            if target_input: break
+            
+        # 2. Xử lý User XPath (Dynamic ID handling)
+        # XPath User đưa: "//*[@id="mount..."]/div/div/..../div/div" -> đây có thể là wrapper
+        if not target_input:
+             # Tìm input nằm sâu trong cấu trúc div (fallback)
+             # Tìm tất cả input hiển thị trong dialog
+             dialog_inputs = driver.find_elements(By.XPATH, "//div[@role='dialog']//input")
+             for inp in dialog_inputs:
+                 if inp.is_displayed():
+                     target_input = inp
+                     print("   [2FA] Tìm thấy input trong Dialog.")
+                     break
 
-    # Fallback Done
+        # 3. Thực hiện Focus & Type
+        if target_input:
+            # Click vào parent để đảm bảo focus nếu click input bị chặn
+            try:
+                driver.execute_script("arguments[0].parentElement.click();", target_input)
+            except: pass
+            
+            # Click trực tiếp input
+            try:
+                target_input.click()
+            except: 
+                 driver.execute_script("arguments[0].click();", target_input)
+            
+            time.sleep(0.5)
+            
+            # Action chains send keys (Global send keys vào active element)
+            ActionChains(driver).send_keys(otp_code).perform()
+            entered_otp = True
+            print("   [2FA] Đã nhập OTP (ActionChains Global trên Target).")
+        else:
+            print("   [2FA] Không tìm thấy input cụ thể, thử click tọa độ giữa màn hình...")
+            # Fallback cực đoan: Click vào body rồi tab hoặc tìm input chung chung
+            
+    except Exception as e:
+        print(f"   [2FA] Lỗi nhập ActionChains: {e}")
+
+    # 1. Fallback nhập trực tiếp (SendKeys) nếu chưa được
+    if not entered_otp:
+        try:
+            # Tìm input có maxlength=6 (Đặc trưng của IG 2FA)
+            candidates = driver.find_elements(By.CSS_SELECTOR, "input[maxlength='6']")
+            for inp in candidates:
+                if inp.is_displayed():
+                    target_input = inp
+                    print("   [2FA] Tìm thấy input OTP (theo maxlength=6).")
+                    break
+            
+            # Nếu không thấy, tìm input hiển thị đầu tiên trong modal
+            if not target_input:
+                inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text'], input[type='number']")
+                for inp in inputs:
+                    if inp.is_displayed():
+                        target_input = inp
+                        print("   [2FA] Tìm thấy input OTP (theo hiển thị).")
+                        break
+                        
+            if target_input:
+                # Click focus
+                try: target_input.click()
+                except: pass
+                time.sleep(0.2)
+                
+                # Clear & Send Keys (Từng ký tự để kích hoạt event)
+                target_input.clear()
+                for digit in str(otp_code):
+                    target_input.send_keys(digit)
+                    time.sleep(0.05) 
+                
+                entered_otp = True
+                print(f"   [2FA] Đã nhập mã {otp_code} (SendKeys).")
+        except Exception as e:
+            print(f"   [2FA] Lỗi nhập phím thường: {e}")
+
+    # 2. Fallback JS (React Safe)
+    # Check lại value
+    try:
+        val = ""
+        # Cố gắng lấy value từ active element nếu target_input fail
+        active_el = driver.switch_to.active_element
+        if active_el and active_el.tag_name == 'input':
+             val = active_el.get_attribute("value")
+        elif target_input: 
+            val = target_input.get_attribute("value")
+        
+        # Nếu chưa nhập được hoặc value rỗng -> Dùng JS inject
+        if not entered_otp or not val:
+            print(f"   [2FA] Input value='{val}' -> Thử nhập bằng JS (React Safe)...")
+            
+            # Script tìm lại input maxlength 6 nếu target_input mất ref
+            js_code = """
+                var otp = arguments[0];
+                var found = false;
+                
+                function setNativeValue(element, value) {
+                    var lastValue = element.value;
+                    element.value = value;
+                    var event = new Event('input', { bubbles: true });
+                    // Hack for React 15/16
+                    var tracker = element._valueTracker;
+                    if (tracker) {
+                        tracker.setValue(lastValue);
+                    }
+                    element.dispatchEvent(event);
+                }
+
+                // Strategy 0: Active Element
+                if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+                    setNativeValue(document.activeElement, otp);
+                    found = true;
+                }
+
+                // Strategy 1: Try maxlength 6 (Most accurate for 2FA)
+                if (!found) {
+                    var inputs = document.querySelectorAll("input[maxlength='6']");
+                    for(var i=0; i<inputs.length; i++) {
+                        if(inputs[i].offsetParent !== null) {
+                            inputs[i].focus();
+                            setNativeValue(inputs[i], otp);
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                
+                // Strategy 2: Fallback generic
+                if (!found) {
+                    var allInputs = document.querySelectorAll("input[type='text'], input[type='number']");
+                     for(var i=0; i<allInputs.length; i++) {
+                        if(allInputs[i].offsetParent !== null) {
+                            allInputs[i].focus();
+                            setNativeValue(allInputs[i], otp);
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                return found;
+            """
+            driver.execute_script(js_code, otp_code)
+            entered_otp = True
+            print("   [2FA] Đã thực thi JS nhập OTP (React Pattern).")
+            
+    except Exception as e:
+        print(f"   [2FA] Lỗi nhập JS: {e}")
+
+    time.sleep(1)
+
+    # --- VERIFY OTP ENTRY BEFORE NEXT ---
+    # Kiểm tra chắc chắn đã có OTP trong input chưa
+    print("   [2FA] Verify OTP input value...")
+    verify_js = """
+        var otp = arguments[0];
+        var inputs = document.querySelectorAll("input");
+        for(var i=0; i<inputs.length; i++) {
+            if (inputs[i].value == otp) return true;
+        }
+        return false;
+    """
+    is_filled = driver.execute_script(verify_js, otp_code)
+    
+    if not is_filled:
+        print("   [2FA] Warning: OTP chưa được nhập đúng giá trị. Thử lại lần cuối...")
+        # Retry logic here if needed (e.g. re-run JS)
+        driver.execute_script(js_code, otp_code)
+        time.sleep(1)
+        is_filled = driver.execute_script(verify_js, otp_code)
+        
+    if not is_filled:
+        raise Exception("NHẬP OTP THẤT BẠI: Input value không khớp code.")
+        
+    print("   [2FA] Verify Input OK. Proceed to Next.")
+    
+    # Helper: Hàm click mạnh tay
+    def robust_click(xpath_list, description):
+        for xpath in xpath_list:
+            try:
+                els = driver.find_elements(By.XPATH, xpath)
+                for el in els:
+                    if el.is_displayed():
+                        # Highlighting for debug
+                        driver.execute_script("arguments[0].style.border='3px solid red'", el)
+                        time.sleep(0.2)
+                        # Scroll & Click
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+                        time.sleep(0.5)
+                        try:
+                            el.click()
+                        except:
+                            driver.execute_script("arguments[0].click();", el)
+                        print(f"   [2FA] Đã click {description}")
+                        return True
+            except:
+                pass
+        return False
+
+    # --- CLICK NEXT (XÁC NHẬN OTP) ---
+    print("   [2FA] Nhấn Next để xác nhận OTP...")
+    next_xpaths = [
+        "//span[text()='Next']", 
+        "//span[text()='Tiếp']",
+        "//div[@role='button']//span[contains(text(), 'Next')]",
+        "//div[@role='button']//span[contains(text(), 'Tiếp')]"
+    ]
+    
+    robust_click(next_xpaths, "Next")
+    
+    # --- CHỜ MÀN HÌNH 'DONE' (GIAI ĐOẠN QUAN TRỌNG) ---
+    print("   [2FA] Đang đợi kết quả xác nhận OTP (Chờ nút Done)...")
+    success_confirmed = False
+    
+    done_xpaths = [
+        "//span[text()='Done']", 
+        "//span[text()='Xong']",
+        "//div[@role='button']//span[contains(text(), 'Done')]",
+        "//div[@role='button']//span[contains(text(), 'Xong')]"
+    ]
+
+    for i in range(15): # Loop 15 lần (khoảng 15-20s)
+        time.sleep(1.5)
+        
+        # 1. Check lỗi từ Instagram (OTP sai)
+        try:
+            body_text_check = driver.find_element(By.TAG_NAME, "body").text.lower()
+            if "code isn't right" in body_text_check or "mã không đúng" in body_text_check:
+                raise Exception("OTP CODE SAI (Instagram từ chối).")
+            if "please check the code" in body_text_check:
+                raise Exception("OTP CODE SAI (Please check the code).")
+        except Exception as e:
+            if "OTP CODE SAI" in str(e): raise e
+
+        # 2. Check xem nút Done đã hiện chưa
+        found_done = False
+        for xpath in done_xpaths:
+            if len(driver.find_elements(By.XPATH, xpath)) > 0:
+                # Kiểm tra hiển thị
+                if any(e.is_displayed() for e in driver.find_elements(By.XPATH, xpath)):
+                    found_done = True
+                    break
+        
+        if found_done:
+            success_confirmed = True
+            print("   [2FA] => Đã thấy nút Done (OTP OK).")
+            break
+            
+        # Nếu chưa thấy Done, có thể nút Next click hụt, nhấn lại Next
+        if i % 3 == 0 and i > 0:
+             print(f"   [2FA] Chưa thấy Done, thử click Next lại lần {int(i/3)}...")
+             robust_click(next_xpaths, "Next (Retry)")
+
+    if not success_confirmed:
+        raise Exception("TIMEOUT: Không thấy nút Done sau khi nhập OTP. Có thể OTP sai hoặc mạng lag.")
+
+    # --- CLICK DONE (HOÀN TẤT) ---
+    print("   [2FA] Đợi 3s để màn hình 'Done' ổn định...")
+    time.sleep(3) # Thêm delay theo yêu cầu user để tránh click trượt khi animation chưa xong
+    
+    print("   [2FA] Nhấn Done để hoàn tất quy trình...")
+    clicked_done = robust_click(done_xpaths, "Done")
+    
     if not clicked_done:
-        wait_and_click(driver, By.XPATH, "//div[@role='button']//span[contains(text(), 'Done') or contains(text(), 'Xong')]")
+        # Fallback JS tìm và click mạnh hơn, có check throw error
+        try:
+            print("   [2FA] Click Done (Selenium) fail, thử JS...")
+            driver.execute_script("""
+                var found = false;
+                var elements = document.querySelectorAll('span, div[role="button"]');
+                for (var i = 0; i < elements.length; i++) {
+                    var txt = elements[i].innerText.trim().toLowerCase();
+                    if (txt === 'done' || txt === 'xong') {
+                        elements[i].click();
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) throw "JS could not find Done button";
+            """)
+            clicked_done = True
+            print("   [2FA] Click Done (JS) thành công.")
+        except Exception as e:
+            print(f"   [2FA] Click Done (JS) thất bại: {e}")
+            clicked_done = False
+            
+    if not clicked_done:
+        raise Exception("LỖI CRITICAL: Không nhấn được nút Done cuối cùng. 2FA chưa complete.")
     
     time.sleep(3)
+    
+    # Check lại lần nữa xem còn ở màn hình done không (Optional)
+    # Nếu còn chữ Done -> click fail
     return secret_key
