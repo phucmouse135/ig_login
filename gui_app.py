@@ -316,12 +316,16 @@ class Instagram2FAToolApp:
         # Reset queue
         self.task_queue = queue.Queue()
         for iid in items:
-            # Chỉ chạy những dòng chưa hoàn thành
+            # Chỉ chạy những dòng chưa hoàn thành hoặc chưa có kết quả "ALREADY_2FA_ON"
             curr_vals = self.tree_input.item(iid, "values")
             # Note is index 10
-            status_note = curr_vals[10]
-            if "Thành công" not in status_note:
-                self.task_queue.put(iid)
+            status_note = str(curr_vals[10]) # Chuyển thành string cho chắc
+            
+            # Skip logic: Nếu "Thành công" HOẶC "ALREADY_2FA_ON" nằm trong note -> Bỏ qua
+            if "Thành công" in status_note or "ALREADY_2FA_ON" in status_note:
+                continue
+                
+            self.task_queue.put(iid)
 
         # Start Workers
         threading.Thread(target=self.run_thread_pool, args=(threads_count,), daemon=True).start()
