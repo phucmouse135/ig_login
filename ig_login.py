@@ -39,10 +39,23 @@ def login_instagram_via_cookie(driver, cookie_raw_string):
         pass
 
     # Bước 5: Validate Login
-    # Nếu vẫn còn ô nhập password -> Login fail
-    if len(driver.find_elements(By.CSS_SELECTOR, "input[name='password']")) > 0:
+    # Kiểm tra trạng thái đăng nhập
+    # Cập nhật selector input pass dựa trên element: <input name="password" aria-label="Password" type="password" ...>
+    has_password_input = (len(driver.find_elements(By.CSS_SELECTOR, "input[name='password']")) > 0 or 
+                          len(driver.find_elements(By.CSS_SELECTOR, "input[type='password']")) > 0 or
+                          len(driver.find_elements(By.CSS_SELECTOR, "input[aria-label='Password']")) > 0)
+    
+    # Check thêm trường hợp "Use another profile" (nghĩa là cookie lỗi/hết hạn, nó đá ra màn hình chọn nick)
+    has_use_another_profile = len(driver.find_elements(By.XPATH, "//*[contains(text(), 'Use another profile') or contains(text(), 'Chuyển tài khoản khác')]")) > 0
+
+    has_home_icon = (len(driver.find_elements(By.CSS_SELECTOR, "svg[aria-label='Home']")) > 0 or 
+                     len(driver.find_elements(By.CSS_SELECTOR, "svg[aria-label='Trang chủ']")) > 0 or 
+                     len(driver.find_elements(By.CSS_SELECTOR, "svg[aria-label='Search']")) > 0)
+
+    # Nếu vẫn còn ô nhập password HOẶC nút "Use another profile" VÀ không thấy Home -> Coi như Login Fail
+    if (has_password_input or has_use_another_profile) and not has_home_icon:
         print("   [IG] Login FAIL (Cookie chết hoặc sai).")
-        return False
+        raise Exception("COOKIE_DIE: Found Login Form")
         
     # Nếu thấy Avatar hoặc Home Icon -> Login Pass
     # Selector SVG aria-label='Home' hoặc 'Trang chủ'

@@ -37,61 +37,66 @@ def process_account(line_data):
 
     print(Fore.CYAN + f"[{username}] Bắt đầu xử lý...")
     driver = None
+    result_to_save = None
     
-    try:
-        # 1. Khởi tạo Browser
-        driver = get_driver(headless=True) # Để False để bạn nhìn thấy quy trình, OK rồi thì sửa thành True
-        
-        # 2. Login Instagram
-        if login_instagram_via_cookie(driver, cookie_str):
+    result_to_save = None
+    
+    # Retry logic: 3 lần login
+    MAX_RETRIES = 3
+    for attempt in range(1, MAX_RETRIES + 1):
+        driver = None
+        try:
+            print(Fore.YELLOW + f"[{username}] Login thử lần {attempt}...")
+            # 1. Khởi tạo Browser (Mỗi lần retry là 1 browser mới sạch sẽ)
+            driver = get_driver(headless=True) 
             
-            # 3. Setup 2FA & Lấy Key
-            secret_key = setup_2fa(driver, email, email_pass)
-            
-            # 4. Lưu kết quả
-            # Yêu cầu: "2 tab ivb47SD26tw [TAB] [TAB] lunamaya57@iname.com -> paste kết quả vào ở đây"
-            # Tức là chèn vào vị trí index 2 (giữa pass IG và email)
-            
-            # Logic replace: parts[2] đang là rỗng -> gán key vào
-            # Nếu input của bạn là: User \t Pass \t \t Email ...
-            # Thì parts[2] là khoảng trắng giữa 2 tab
-            
-            if len(parts) > 2:
-                parts[2] = secret_key
-            else:
-                # Nếu format lạ, chèn đại vào cuối
-                parts.append(secret_key)
+            # 2. Login Instagram (Sẽ raise Exception nếu fail)
+            if login_instagram_via_cookie(driver, cookie_str):
                 
-            final_line = "\t".join(parts) + "\n"
-            
-            with file_lock:
-                with open("output.txt", "a", encoding="utf-8") as f:
-                    f.write(final_line)
-            
-            print(Fore.GREEN + f"[{username}] THÀNH CÔNG! Key: {secret_key}")
-            
-        else:
-            # Login thất bại
-            result_to_save = "LOGIN_FAILED"
-            print(Fore.RED + f"[{username}] Login IG thất bại (Cookie die).")
+                # 3. Setup 2FA & Lấy Key
+                print(Fore.CYAN + f"[{username}] Đang lấy 2FA...")
+                secret_key = setup_2fa(driver, email, email_pass)
+                
+                # 4. Lưu kết quả
+                result_to_save = secret_key
+                print(Fore.GREEN + f"[{username}] THÀNH CÔNG! Key: {secret_key}")
+                
+                # Thành công thì quit và break loop check login
+                try: driver.quit()
+                except: pass
+                driver = None
+                break 
 
-    except Exception as e:
-        # Lỗi Exception chung
-        error_str = str(e).replace("\n", " ").replace("\t", " ")
-        result_to_save = f"ERROR: {error_str}"
-        print(Fore.RED + f"[{username}] Lỗi Exception: {str(e)}")
+        except Exception as e:
+            print(Fore.RED + f"[{username}] Lỗi lần {attempt}: {str(e)}")
+            
+            # Đóng browser hiện tại để clear session/cache cho lần sau
+            if driver:
+                try: driver.quit()
+                except: pass
+                driver = None
+            
+            # Nếu là lần cuối cùng thì mới ghi nhận lỗi chính thức
+            if attempt == MAX_RETRIES:
+                error_str = str(e).replace("\n", " ").replace("\t", " ")
+                result_to_save = f"ERROR: {error_str}"
+                print(Fore.RED + f"[{username}] => XÁC NHẬN THẤT BẠI sau 3 lần.")
+    
+    # Logic ghi file được chuyển xuống finally ở dưới...
+    try:
+        pass # Placeholder để giữ cấu trúc indentation nếu cần, nhưng thực tế đoạn dưới là finally của hàm process_account (nhưng process_account ko có try/finally to đùng, mà là logic tuần tự)
+             # Sửa lại: Do đoạn code cũ có `try... except... finally`, ta đã thay thế cụm `try` đó bằng vòng `for` + `try` lồng nhau.
+             # Ta sẽ xóa khối finally cũ và thay bằng logic ghi file check null trực tiếp sau vòng for.
             
     finally:
-        if driver:
-            try: driver.quit()
-            except: pass
-            
-        # --- PHẦN GHI FILE OUTPUT ---
-        # Kiểm tra nếu result_to_save chưa có giá trị (do exception trước khi gán)
-        if not result_to_save:
-             result_to_save = "UNKNOWN_ERROR"
+        pass # Dummy
 
-        # Đảm bảo list parts có đủ chỗ để gán vào index 2
+    # --- PHẦN GHI FILE OUTPUT ---
+    # Kiểm tra nếu result_to_save chưa có giá trị (do exception full 3 lần)
+    if not result_to_save:
+            result_to_save = "UNKNOWN_ERROR"
+
+    # Đảm bảo list parts có đủ chỗ để gán vào index 2
         while len(parts) <= 2:
             parts.append("")
         

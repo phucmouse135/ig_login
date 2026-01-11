@@ -97,10 +97,11 @@ class Instagram2FAToolApp:
         ttk.Button(tb_input, text="Xóa dòng chọn", command=self.delete_selected_input).pack(side="left", padx=2)
         ttk.Button(tb_input, text="Xóa toàn bộ", command=self.delete_all_input).pack(side="left", padx=2)
         
-        # Moved Export buttons here
+        # Changed Export buttons here
         ttk.Separator(tb_input, orient="vertical").pack(side="left", fill="y", padx=5)
+        ttk.Button(tb_input, text="Xuất Toàn Bộ", command=self.export_all).pack(side="left", padx=2)
         ttk.Button(tb_input, text="Xuất Thành Công", command=self.export_success).pack(side="left", padx=2)
-        ttk.Button(tb_input, text="Xuất No Success", command=self.export_fail).pack(side="left", padx=2)
+        ttk.Button(tb_input, text="Xuất FAIL/PENDING", command=self.export_fail).pack(side="left", padx=2)
 
         # Định nghĩa cột
         self.cols_def = ["ID", "User", "PASS", "2FA", "Email", "Pass Email", "Post", "Followers", "Following", "COOKIE", "Note"]
@@ -234,13 +235,17 @@ class Instagram2FAToolApp:
         self.total_input = 0
         self.update_progress_ui()
 
+    def export_all(self):
+        # Xuất toàn bộ, không filter
+        self._export_data(lambda tags: True, "ALL")
+
     def export_success(self):
         # Xuất những dòng có tag 'success'
         self._export_data(lambda tags: "success" in tags, "SUCCESS")
 
     def export_fail(self):
         # Xuất những dòng KHÔNG có tag 'success' (bao gồm pending, fail, running...)
-        self._export_data(lambda tags: "success" not in tags, "NO_SUCCESS")
+        self._export_data(lambda tags: "success" not in tags, "FAIL_PENDING")
 
     def _export_data(self, condition_func, suffix):
         try:
