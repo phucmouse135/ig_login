@@ -117,10 +117,14 @@ def setup_2fa(driver, email, email_pass, target_username=None):
     # Đợi manual check thay vì WebDriverWait
     print("   [2FA] Đang đợi màn hình tiếp theo load...")
     found_step = False
-    for _ in range(20): # Đợi khoảng 20s
+    
+    # Tăng thời gian chờ lên 60s để bắt trường hợp mạng lag / "Two-factor authentication is on" hiện chậm
+    for _ in range(60): 
         src = driver.page_source.lower()
         if "check your email" in src or "authentication app" in src or "is on" in src:
             found_step = True
+            # Đợi thêm chút cho UI ổn định hoàn toàn
+            time.sleep(3)
             break
         time.sleep(1)
         
@@ -132,12 +136,20 @@ def setup_2fa(driver, email, email_pass, target_username=None):
     # Cập nhật context màn hình hiện tại
     try:
         # Check kỹ các thẻ Header H2, H1 trong modal (Thường popup IG dùng h2 hoặc div role=heading)
-        headers = driver.find_elements(By.TAG_NAME, "h2")
-        for h in headers:
-            txt = h.text.lower()
-            if "authentication is on" in txt or "đang bật" in txt:
-                 print("   [2FA] Phát hiện popup: Two-factor authentication is on.")
-                 raise Exception("ALREADY_2FA_ON")
+        # Bổ sung check xpath deep search cho các text nằm sâu trong span như selector bạn đưa:
+        # div > h2 > span
+        check_elements = driver.find_elements(By.XPATH, "//*[@id='mount_0_0_2j']//h2//span") # Selector cứng
+        check_elements += driver.find_elements(By.XPATH, "//h2//span") # Selector mềm
+        check_elements += driver.find_elements(By.TAG_NAME, "h2")
+        
+        for el in check_elements:
+            try:
+                txt = el.text.lower()
+                if "authentication is on" in txt or "đang bật" in txt:
+                    print(f"   [2FA] Phát hiện text '{txt}' -> 2FA ON.")
+                    raise Exception("ALREADY_2FA_ON")
+            except: pass # Ignore stale element
+            
     except Exception as e:
         if str(e) == "ALREADY_2FA_ON": raise e
 
@@ -145,7 +157,10 @@ def setup_2fa(driver, email, email_pass, target_username=None):
     
     # --- KIỂM TRA SỚM: ĐÃ BẬT 2FA CHƯA? ---
     # User Request: check text "Two-factor authentication is on"
-    if "two-factor authentication is on" in body_text or "is on" in body_text or "đang bật" in body_text:
+    # Thêm check trực tiếp bằng XPATH chứa text cụ thể (mạnh hơn body.text đôi khi bị ẩn)
+    is_2fa_on_xpath = len(driver.find_elements(By.XPATH, "//*[contains(text(), 'Two-factor authentication is on') or contains(text(), 'Tính năng xác thực 2 yếu tố đang bật')]")) > 0
+    
+    if is_2fa_on_xpath or "two-factor authentication is on" in body_text or "is on" in body_text or "đang bật" in body_text:
          print("   [2FA] Phát hiện: 2FA ĐÃ ĐƯỢC BẬT TỪ TRƯỚC. Dừng lại.")
          raise Exception("ALREADY_2FA_ON")
 
