@@ -97,21 +97,21 @@ def process_account(line_data):
             result_to_save = "UNKNOWN_ERROR"
 
     # Đảm bảo list parts có đủ chỗ để gán vào index 2
-        while len(parts) <= 2:
+    while len(parts) <= 2:
             parts.append("")
         
-        # Gán kết quả vào vị trí tab thứ 2 (Index 2 là cột thứ 3)
-        parts[2] = result_to_save
+    # Gán kết quả vào vị trí tab thứ 2 (Index 2 là cột thứ 3)
+    parts[2] = result_to_save
         
-        # Ghép lại thành dòng string
-        final_line = "\t".join(parts) + "\n"
+    # Ghép lại thành dòng string
+    final_line = "\t".join(parts) + "\n"
         
         # Ghi vào file output.txt (Thread Safe)
-        with file_lock:
-            try:
-                with open("output.txt", "a", encoding="utf-8") as f:
-                    f.write(final_line)
-            except: pass
+    with file_lock:
+        try:
+            with open("output.txt", "a", encoding="utf-8") as f:
+                f.write(final_line)
+        except: pass
 
 def main():
     print("--- TOOL AUTO 2FA INSTAGRAM ---")
