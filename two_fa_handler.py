@@ -153,59 +153,180 @@ def setup_2fa(driver, email, email_pass, target_username=None):
     except Exception as e:
         if str(e) == "ALREADY_2FA_ON": raise e
 
-    body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
-    
-    # --- EARLY CHECK: IS 2FA ON? ---
-    # User Request: check text "Two-factor authentication is on"
-    # Add xpath check
-    is_2fa_on_xpath = len(driver.find_elements(By.XPATH, "//*[contains(text(), 'Two-factor authentication is on') or contains(text(), 'Tính năng xác thực 2 yếu tố đang bật')]")) > 0
-    
-    if is_2fa_on_xpath or "two-factor authentication is on" in body_text or "is on" in body_text or "đang bật" in body_text:
-         print("   [2FA] Detected: 2FA ALREADY ON. Stopping.")
-         raise Exception("ALREADY_2FA_ON")
+    # Read body/source and use a stronger checkpoint detection routine
+    def _detect_checkpoint(drv, attempts=8, delay=1.5):
+        keywords = ["check your email", "enter the code", "nhập mã", "security code", "mã bảo mật", "enter code", "verify email"]
+        input_selectors = [
+            "input[maxlength='6']",
+            "input[placeholder*='code']",
+            "input[placeholder*='Enter']",
+            "input[aria-label*='code']",
+            "input[type='number']",
+            "input[type='text']",
+        ]
 
-    # Keywords from image: "check your email", "enter the code"
-    keywords = ["check your email", "enter the code", "nhập mã", "security code", "mã bảo mật"]
-    
-    is_checkpoint = False
-    for kw in keywords:
-        if kw in body_text:
-            is_checkpoint = True
-            break
-            
-    if is_checkpoint:
+        for attempt in range(attempts):
+            try:
+                src = drv.page_source.lower() or ""
+            except:
+                src = ""
+            try:
+                body_txt = drv.find_element(By.TAG_NAME, "body").text.lower()
+            except:
+                body_txt = ""
+
+            # 1) Keyword in page source / body
+            kw_found = any(kw in src or kw in body_txt for kw in keywords)
+
+            # 2) Visible input present
+            input_found = False
+            try:
+                for sel in input_selectors:
+                    els = drv.find_elements(By.CSS_SELECTOR, sel)
+                    if any(e.is_displayed() for e in els):
+                        input_found = True
+                        break
+            except:
+                input_found = False
+
+            # 3) Presence of continue/next/enter-code text nodes
+            btn_found = False
+            try:
+                btns = drv.find_elements(By.XPATH, "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'check your email') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'enter the code') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'enter code') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')]")
+                if any(b.is_displayed() for b in btns):
+                    btn_found = True
+            except:
+                btn_found = False
+
+            if kw_found or input_found or btn_found:
+                # give a short stabilization wait then re-check briefly
+                time.sleep(0.6)
+                try:
+                    body_check = drv.find_element(By.TAG_NAME, "body").text.lower()
+                except:
+                    body_check = ""
+                if any(kw in body_check for kw in keywords) or input_found or btn_found:
+                    print(f"   [2FA] Checkpoint detection: kw={kw_found}, input={input_found}, btn={btn_found} (attempt {attempt+1})")
+                    return True
+
+            time.sleep(delay)
+
+        return False
+
+    # Early: is 2FA already on?
+    try:
+        body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
+    except:
+        body_text = ""
+
+    is_2fa_on_xpath = len(driver.find_elements(By.XPATH, "//*[contains(text(), 'Two-factor authentication is on') or contains(text(), 'Tính năng xác thực 2 yếu tố đang bật')]")) > 0
+    if is_2fa_on_xpath or "two-factor authentication is on" in body_text or "is on" in body_text or "đang bật" in body_text:
+        print("   [2FA] Detected: 2FA ALREADY ON. Stopping.")
+        raise Exception("ALREADY_2FA_ON")
+
+    # Use robust detection
+    if _detect_checkpoint(driver, attempts=10, delay=1.2):
         print("   [2FA] Checkpoint Detected: Email verify required...")
-        
-        # 1. Open new tab to get code
-        mail_code = get_code_from_mail(driver, email, email_pass)
-        
+
+        # Do not refresh here: reload can hide the code input after selecting the IG account
+        time.sleep(1.5)
+
+        # 1. Open new tab to get code (mail handler selection handled earlier)
+        mail_code = None
+        try:
+            # call chosen handler (two_fa_handler may be called with mail_source param)
+            # fallback to default mail_handler if no specialized file
+            try:
+                # prefer specialized wrappers
+                from mail_handler_mailcom import get_code_from_mailcom as _mailcom
+            except Exception:
+                _mailcom = None
+            try:
+                from mail_handler_gmx import get_code_from_gmx as _gmx
+            except Exception:
+                _gmx = None
+
+            # decide using available handlers and requested param
+            # note: setup_2fa may be invoked with mail_source variable in outer scope
+            ms = locals().get('mail_source', None)
+            if ms == 'gmx' and _gmx:
+                mail_code = _gmx(driver, email, email_pass)
+            elif _mailcom:
+                mail_code = _mailcom(driver, email, email_pass)
+            else:
+                # fallback to original implementation if wrapper not present
+                from mail_handler import get_code_from_mail as _orig_mail
+                mail_code = _orig_mail(driver, email, email_pass)
+        except Exception as e:
+            print(f"   [2FA] Mail handler error: {e}")
+
         if not mail_code:
             raise Exception("Could not get mail code to bypass Checkpoint")
             
         # 2. Input code
         # In image: Placeholder="Code"
+        js_set_mail_code = """
+            var code = arguments[0];
+            function setNativeValue(element, value) {
+                var lastValue = element.value;
+                element.value = value;
+                var event = new Event('input', { bubbles: true });
+                var tracker = element._valueTracker;
+                if (tracker) {
+                    tracker.setValue(lastValue);
+                }
+                element.dispatchEvent(event);
+            }
+            var inputs = document.querySelectorAll("input[type='text'], input[type='number'], input");
+            for (var i = 0; i < inputs.length; i++) {
+                if (inputs[i] && inputs[i].offsetParent !== null) {
+                    inputs[i].focus();
+                    setNativeValue(inputs[i], code);
+                    return true;
+                }
+            }
+            return false;
+        """
         try:
             # Find input
             inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text'], input[type='number']")
             entered = False
             for inp in inputs:
                 if inp.is_displayed():
-                    inp.clear()
-                    inp.send_keys(mail_code)
+                    try:
+                        inp.clear()
+                    except:
+                        pass
+                    inp.send_keys(str(mail_code))
                     entered = True
                     break
             
             if not entered:
-                # Fallback JS
-                driver.execute_script("document.querySelector('input').value = arguments[0]", mail_code)
-                # Need trigger input event
-                driver.execute_script(
-                    "document.querySelector('input').dispatchEvent(new Event('input', { bubbles: true }));"
-                )
+                driver.execute_script(js_set_mail_code, str(mail_code))
         except Exception as e:
             print(f"   [2FA] Input error: {e}")
 
         time.sleep(2)
+        
+        # Verify mail code input value
+        verify_mail_js = """
+            var code = (arguments[0] || '').replace(/\\s+/g, '');
+            var inputs = document.querySelectorAll('input');
+            for (var i = 0; i < inputs.length; i++) {
+                var val = (inputs[i].value || '').replace(/\\s+/g, '');
+                if (val === code) return true;
+            }
+            return false;
+        """
+        is_mail_filled = driver.execute_script(verify_mail_js, str(mail_code))
+        if not is_mail_filled:
+            print("   [2FA] Warning: Email code not detected in input. Retrying via JS...")
+            driver.execute_script(js_set_mail_code, str(mail_code))
+            time.sleep(1)
+            is_mail_filled = driver.execute_script(verify_mail_js, str(mail_code))
+
+        if not is_mail_filled:
+            raise Exception("MAIL CODE ENTRY FAILED: Input value mismatch.")
         
         # 3. Click Continue
         print("   [2FA] Clicking Continue...")
@@ -216,8 +337,127 @@ def setup_2fa(driver, email, email_pass, target_username=None):
             except:
                 pass
                 
-        time.sleep(8) 
+        time.sleep(8)
+        try:
+            body_text_check = driver.find_element(By.TAG_NAME, "body").text.lower()
+            if ("code isn't right" in body_text_check or
+                "wrong code" in body_text_check or
+                "incorrect" in body_text_check or
+                "please check the code" in body_text_check):
+                raise Exception("WRONG EMAIL CODE (Instagram rejected).")
+        except Exception as e:
+            if "WRONG EMAIL CODE" in str(e):
+                raise
         _raise_if_change_not_allowed_yet(driver)
+        
+    found_step = False
+    
+    # Increase wait to 60s
+    for _ in range(60): 
+        src = driver.page_source.lower()
+        if "check your email" in src or "authentication app" in src or "is on" in src:
+            found_step = True
+            # Wait for UI stability
+            time.sleep(3)
+            break
+        time.sleep(1)
+        
+    if not found_step:
+        print("   [2FA] Warning: Timeout waiting for next screen.")
+    
+    _raise_if_change_not_allowed_yet(driver)
+
+    # Update current screen context
+    try:
+        # Check carefully H2, H1 in modal
+        # Supplement deep xpath search
+        # div > h2 > span
+        check_elements = driver.find_elements(By.XPATH, "//*[@id='mount_0_0_2j']//h2//span") # Hard selector
+        check_elements += driver.find_elements(By.XPATH, "//h2//span") # Soft selector
+        check_elements += driver.find_elements(By.TAG_NAME, "h2")
+        
+        for el in check_elements:
+            try:
+                txt = el.text.lower()
+                if "authentication is on" in txt or "đang bật" in txt:
+                    print(f"   [2FA] Detected text '{txt}' -> 2FA ON.")
+                    raise Exception("ALREADY_2FA_ON")
+            except: pass # Ignore stale element
+            
+    except Exception as e:
+        if str(e) == "ALREADY_2FA_ON": raise e
+
+    # Read body/source and use a stronger checkpoint detection routine
+    def _detect_checkpoint(drv, attempts=8, delay=1.5):
+        keywords = ["check your email", "enter the code", "nhập mã", "security code", "mã bảo mật", "enter code", "verify email"]
+        input_selectors = [
+            "input[maxlength='6']",
+            "input[placeholder*='code']",
+            "input[placeholder*='Enter']",
+            "input[aria-label*='code']",
+            "input[type='number']",
+            "input[type='text']",
+        ]
+
+        for attempt in range(attempts):
+            try:
+                src = drv.page_source.lower() or ""
+            except:
+                src = ""
+            try:
+                body_txt = drv.find_element(By.TAG_NAME, "body").text.lower()
+            except:
+                body_txt = ""
+
+            # 1) Keyword in page source / body
+            kw_found = any(kw in src or kw in body_txt for kw in keywords)
+
+            # 2) Visible input present
+            input_found = False
+            try:
+                for sel in input_selectors:
+                    els = drv.find_elements(By.CSS_SELECTOR, sel)
+                    if any(e.is_displayed() for e in els):
+                        input_found = True
+                        break
+            except:
+                input_found = False
+
+            # 3) Presence of continue/next/enter-code text nodes
+            btn_found = False
+            try:
+                btns = drv.find_elements(By.XPATH, "//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'check your email') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'enter the code') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'enter code') or contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')]")
+                if any(b.is_displayed() for b in btns):
+                    btn_found = True
+            except:
+                btn_found = False
+
+            if kw_found or input_found or btn_found:
+                # give a short stabilization wait then re-check briefly
+                time.sleep(0.6)
+                try:
+                    body_check = drv.find_element(By.TAG_NAME, "body").text.lower()
+                except:
+                    body_check = ""
+                if any(kw in body_check for kw in keywords) or input_found or btn_found:
+                    print(f"   [2FA] Checkpoint detection: kw={kw_found}, input={input_found}, btn={btn_found} (attempt {attempt+1})")
+                    return True
+
+            time.sleep(delay)
+
+        return False
+
+    # Early: is 2FA already on?
+    try:
+        body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
+    except:
+        body_text = ""
+
+    is_2fa_on_xpath = len(driver.find_elements(By.XPATH, "//*[contains(text(), 'Two-factor authentication is on') or contains(text(), 'Tính năng xác thực 2 yếu tố đang bật')]")) > 0
+    if is_2fa_on_xpath or "two-factor authentication is on" in body_text or "is on" in body_text or "đang bật" in body_text:
+        print("   [2FA] Detected: 2FA ALREADY ON. Stopping.")
+        raise Exception("ALREADY_2FA_ON")
+    
     # STEP 3: CHOOSE AUTHENTICATION APP
     print("   [2FA] Selecting 'Authentication App'...")
     # Find text "Authentication app"
