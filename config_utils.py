@@ -16,8 +16,8 @@ def get_driver(headless=True):
     options.add_argument("--start-maximized")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu") # Tắt GPU acceleration để nhẹ máy
-    options.add_argument("--blink-settings=imagesEnabled=false") # CHẶN LOAD HÌNH ẢNH (Tăng tốc cực mạnh)
+    options.add_argument("--disable-gpu") # Disable GPU acceleration to save resources
+    options.add_argument("--blink-settings=imagesEnabled=false") # BLOCK IMAGES (Huge speed boost)
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-infobars")
     
@@ -30,12 +30,12 @@ def get_driver(headless=True):
 
 def parse_cookie_string(cookie_str):
     """
-    Chuyển chuỗi cookie raw: "datr=abc; ds_user_id=123;..." 
-    thành dạng List Dictionary để nạp vào Selenium
+    Convert raw cookie string: "datr=abc; ds_user_id=123;..." 
+    to List Dictionary for Selenium
     """
     cookies = []
     try:
-        # Tách các cặp key=value bằng dấu ;
+        # Split key=value pairs by ;
         pairs = cookie_str.split(';')
         for pair in pairs:
             if '=' in pair:
@@ -43,11 +43,11 @@ def parse_cookie_string(cookie_str):
                 cookies.append({
                     'name': key, 
                     'value': value, 
-                    'domain': '.instagram.com', # Quan trọng: set domain để IG nhận
+                    'domain': '.instagram.com', # Important: set domain for IG
                     'path': '/'
                 })
     except Exception as e:
-        print(f"Lỗi parse cookie: {e}")
+        print(f"Cookie parse error: {e}")
     return cookies
 
 def wait_and_click(driver, by, value, timeout=10):
