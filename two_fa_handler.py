@@ -5,7 +5,6 @@ import pyotp
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from config_utils import wait_and_click, wait_and_send_keys
-from mail_handler import get_code_from_mail
 
 def _raise_if_change_not_allowed_yet(driver):
     """
@@ -24,7 +23,7 @@ def _raise_if_change_not_allowed_yet(driver):
         )
         print("   [2FA] ERROR: " + msg)
         raise RuntimeError(msg)
-def setup_2fa(driver, email, email_pass, target_username=None):
+def setup_2fa(driver, email, email_pass, target_username=None, mail_source='mailcom'):
     """
     Thực hiện quy trình bật 2FA -> Lấy Key -> Confirm -> Trả về Key.
     """
@@ -176,11 +175,21 @@ def setup_2fa(driver, email, email_pass, target_username=None):
     if is_checkpoint:
         print("   [2FA] Phát hiện Checkpoint: Yêu cầu verify Email...")
         
-        # 1. Mở tab mới lấy code
-        mail_code = get_code_from_mail(driver, email, email_pass)
-        
+        # 1. Mở tab mới lấy code (chọn handler theo mail_source)
+        mail_code = None
+        try:
+            if mail_source == 'gmx':
+                from mail_handler_gmx import get_code_from_gmx
+                mail_code = get_code_from_gmx(driver, email, email_pass)
+            else:
+                # default -> mail.com
+                from mail_handler_mailcom import get_code_from_mailcom
+                mail_code = get_code_from_mailcom(driver, email, email_pass)
+        except Exception as e:
+            print(f"   [2FA] Mail handler error: {e}")
+
         if not mail_code:
-            raise Exception("Không lấy được code mail để qua Checkpoint")
+            raise Exception("Cannot retrieve mail code to pass checkpoint")
             
         # 2. Nhập code vào ô input
         # Trong ảnh: Input có placeholder="Code", ta tìm theo thẻ input hiển thị

@@ -23,6 +23,8 @@ class Instagram2FAToolApp:
         self.executor = None
         self.stop_event = threading.Event()
         self.results_lock = threading.Lock()
+        # Mail source selection: 'mailcom' or 'gmx'
+        self.mail_source = tk.StringVar(value="mailcom")
         
         # Stats
         self.total_input = 0
@@ -67,6 +69,13 @@ class Instagram2FAToolApp:
         self.var_headless = tk.BooleanVar(value=False)
         self.chk_headless = ttk.Checkbutton(frame_run, text="Chạy Ẩn", variable=self.var_headless)
         self.chk_headless.pack(side="left", padx=10)
+
+        # Mail source radio buttons
+        mail_frame = ttk.Frame(frame)
+        mail_frame.grid(row=2, column=0, columnspan=10, sticky="w", pady=5)
+        ttk.Label(mail_frame, text="Nguồn mail:").pack(side="left", padx=(5,5))
+        ttk.Radiobutton(mail_frame, text="mail.com", variable=self.mail_source, value="mailcom").pack(side="left", padx=5)
+        ttk.Radiobutton(mail_frame, text="GMX", variable=self.mail_source, value="gmx").pack(side="left", padx=5)
         
         # Stats Labels
         ttk.Separator(frame_run, orient="vertical").pack(side="left", fill="y", padx=10)
@@ -312,6 +321,8 @@ class Instagram2FAToolApp:
 
         # Lưu trạng thái Headless cho phiên chạy này để các thread con sử dụng
         self.current_headless_mode = self.var_headless.get()
+        # Lưu trạng thái Mail source cho phiên chạy này
+        self.current_mail_source = self.mail_source.get()
 
         # Reset queue
         self.task_queue = queue.Queue()
@@ -387,7 +398,8 @@ class Instagram2FAToolApp:
             if login_instagram_via_cookie(driver, cookie_str):
                 # 2. Setup 2FA Logic
                 # Pass username để chọn đúng dòng nếu có nhiều tài khoản
-                secret_key = setup_2fa(driver, email, email_pass, target_username=username)
+                mail_src = getattr(self, 'current_mail_source', 'mailcom')
+                secret_key = setup_2fa(driver, email, email_pass, target_username=username, mail_source=mail_src)
                 
                 result_2fa = secret_key
                 status_msg = "Thành công"
