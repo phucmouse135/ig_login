@@ -4,12 +4,11 @@ import re
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
 def wait_element(driver, by, value, timeout=10):
     """Hàm chờ element xuất hiện và trả về element đó"""
-    # Manual wait thay vì WebDriverWait
+    # Manual wait (polling)
     steps = int(timeout / 0.5)
     for _ in range(steps):
         try:
@@ -21,11 +20,64 @@ def wait_element(driver, by, value, timeout=10):
     return None
 
 
-def _find_rows_with_frame_search(driver):
+def _stop_loading(driver) -> None:
+    try:
+        driver.execute_script("window.stop();")
+    except Exception:
+        pass
+
+
+def _safe_get(driver, url, timeout=20) -> bool:
+    try:
+        driver.set_page_load_timeout(timeout)
+    except Exception:
+        pass
+    try:
+        driver.get(url)
+        return True
+    except TimeoutException:
+        _stop_loading(driver)
+        return False
+    except WebDriverException:
+        _stop_loading(driver)
+        return False
+
+
+def _safe_refresh(driver, timeout=20) -> bool:
+    try:
+        driver.set_page_load_timeout(timeout)
+    except Exception:
+        pass
+    try:
+        driver.refresh()
+        return True
+    except TimeoutException:
+        _stop_loading(driver)
+        return False
+    except WebDriverException:
+        _stop_loading(driver)
+        return False
+
+
+def _wait_dom_ready(driver, timeout=10, poll=0.5) -> bool:
+    end_time = time.time() + timeout
+    while time.time() < end_time:
+        try:
+            if driver.execute_script("return document.readyState") == "complete":
+                return True
+        except Exception:
+            pass
+        time.sleep(poll)
+    _stop_loading(driver)
+    return False
+
+
+def _find_rows_with_frame_search(driver, verbose=True):
     """Find table rows, try iframe if not found"""
     # 1. Try current context
     rows = driver.find_elements(By.XPATH, "//table[@id='mail-list']//tbody/tr")
-    print(f"   [Mail] Found {len(rows)} rows in main context.")
+    if verbose:
+        print(f"   [Mail] Found {len(rows)} rows in main context.")
     if rows: return rows
 
     # 2. Try iframe
@@ -35,7 +87,8 @@ def _find_rows_with_frame_search(driver):
             driver.switch_to.frame(frame)
             rows = driver.find_elements(By.XPATH, "//table[@id='mail-list']//tbody/tr")
             if rows:
-                print(f"   [Mail] Found mail list in iframe!")
+                if verbose:
+                    print(f"   [Mail] Found mail list in iframe!")
                 return rows
             # If not found, try children frames (nested)
             # Revert to try next frame
@@ -45,7 +98,93 @@ def _find_rows_with_frame_search(driver):
     
     return []
 
-def _find_target_mail_row(driver, target_subject):
+def _wait_for_mail_rows(driver, timeout=12):
+    end_time = time.time() + timeout
+    while time.time() < end_time:
+        rows = _find_rows_with_frame_search(driver, verbose=False)
+        if rows:
+            return rows
+        time.sleep(0.5)
+    return []
+
+
+def _recover_from_hang(driver, reason=""):
+    msg = f" ({reason})" if reason else ""
+    print(f"   [Mail] Page seems stuck{msg}. Attempting recovery...")
+    _stop_loading(driver)
+    time.sleep(1)
+    if not _safe_refresh(driver):
+        _safe_get(driver, "https://www.mail.com/")
+    _wait_dom_ready(driver, timeout=8)
+
+
+def _ensure_logged_in(driver, email, password) -> bool:
+    rows = _wait_for_mail_rows(driver, timeout=4)
+    if rows:
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+        return True
+
+    def _try_login() -> bool:
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+
+        login_btn = wait_element(driver, By.ID, "login-button", timeout=6)
+        if login_btn:
+            driver.execute_script("arguments[0].click();", login_btn)
+            time.sleep(1)
+
+        email_inp = wait_element(driver, By.ID, "login-email", timeout=6)
+        pass_inp = wait_element(driver, By.ID, "login-password", timeout=6)
+        if not email_inp or not pass_inp:
+            return False
+
+        try:
+            email_inp.clear()
+        except Exception:
+            pass
+        email_inp.send_keys(email)
+
+        try:
+            pass_inp.clear()
+        except Exception:
+            pass
+        pass_inp.send_keys(password)
+
+        time.sleep(1)
+        try:
+            driver.find_element(By.CSS_SELECTOR, ".login-submit").click()
+        except Exception:
+            pass_inp.send_keys(Keys.ENTER)
+
+        print("   [Mail] Login clicked, waiting redirect...")
+        _wait_dom_ready(driver, timeout=10)
+        return True
+
+    if not _try_login():
+        _recover_from_hang(driver, "login form not ready")
+        if not _try_login():
+            print("   [Mail] Login form still not ready.")
+            return False
+
+    rows = _wait_for_mail_rows(driver, timeout=8)
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+    if rows:
+        return True
+
+    if "login" in driver.current_url or "logout" in driver.current_url:
+        print("   [Mail] Login FAILED.")
+        return False
+    return True
+
+def _find_target_mail_row(driver, target_subject, rows=None):
     """
     New Algorithm:
     - Support IFRAME search.
@@ -55,7 +194,8 @@ def _find_target_mail_row(driver, target_subject):
     """
     try:
         # Smart search
-        rows = _find_rows_with_frame_search(driver)
+        if rows is None:
+            rows = _find_rows_with_frame_search(driver)
         print(f"   [Mail] Found {len(rows)} rows in Inbox.")
     except Exception as e:
         print(f"   [Mail] Error finding rows: {e}")
@@ -263,12 +403,11 @@ def _get_code_from_mail_attempt(driver, email, password):
     print(f"   [Mail] Accessing: {email}...")
     
     try:
-        try:
-            driver.get("https://www.mail.com/")
-        except:
-            driver.execute_script("window.stop();")
-        
-        time.sleep(3)
+        if not _safe_get(driver, "https://www.mail.com/"):
+            print("   [Mail] Initial load timeout, retrying...")
+            _safe_get(driver, "https://www.mail.com/")
+        _wait_dom_ready(driver, timeout=10)
+        time.sleep(1)
 
         # 1. Popup Cookie
         try:
@@ -286,27 +425,7 @@ def _get_code_from_mail_attempt(driver, email, password):
 
         # 2. Login
         print("   [Mail] Starting Login...")
-        login_btn = wait_element(driver, By.ID, "login-button")
-        if login_btn: driver.execute_script("arguments[0].click();", login_btn)
-        
-        time.sleep(1)
-        wait_element(driver, By.ID, "login-email").send_keys(email)
-        
-        pass_inp = wait_element(driver, By.ID, "login-password")
-        pass_inp.send_keys(password)
-        
-        time.sleep(1)
-        try:
-            driver.find_element(By.CSS_SELECTOR, ".login-submit").click()
-        except:
-            pass_inp.send_keys(Keys.ENTER)
-
-        print("   [Mail] Login clicked, waiting redirect...")
-        time.sleep(8)
-
-        # 3. Check Login
-        if "login" in driver.current_url or "logout" in driver.current_url:
-            print("   [Mail] Login FAILED.")
+        if not _ensure_logged_in(driver, email, password):
             return None
 
         # 4. Scan Mail
@@ -319,17 +438,21 @@ def _get_code_from_mail_attempt(driver, email, password):
                 driver.switch_to.default_content()
                 
                 # REFRESH PAGE LOGIC ROBUST
-                driver.refresh()
-                # Wait load
-                try:
-                    WebDriverWait(driver, 15).until(
-                        lambda d: d.execute_script('return document.readyState') == 'complete'
-                    )
-                except: pass
-                time.sleep(5) # Wait for AJAX
+                if not _safe_refresh(driver):
+                    print("   [Mail] Refresh timeout, trying recovery...")
+                    _recover_from_hang(driver, "refresh timeout")
+                _wait_dom_ready(driver, timeout=12)
+
+                rows = _wait_for_mail_rows(driver, timeout=12)
+                if not rows:
+                    print("   [Mail] Inbox not ready, possible hang.")
+                    _recover_from_hang(driver, "inbox not ready")
+                    if not _ensure_logged_in(driver, email, password):
+                        return None
+                    continue
 
                 # --- NEW LOGIC: FIND UNREAD MAIL ---
-                target_row = _find_target_mail_row(driver, target_subject)
+                target_row = _find_target_mail_row(driver, target_subject, rows=rows)
 
                 if not target_row:
                     print(f"   [Mail] No suitable mail found (Unread + Subject '{target_subject}' + New) in this scan.")
@@ -340,7 +463,6 @@ def _get_code_from_mail_attempt(driver, email, password):
                 
                 # Check opened
                 print("   [Mail] Waiting for mail content...")
-                time.sleep(8) 
 
                 # --- NEW LOGIC: RECURSIVE SEARCH ---
                 def _attempt_extract_in_current_frame(drv):
@@ -399,13 +521,24 @@ def _get_code_from_mail_attempt(driver, email, password):
                     return None
 
                 print("   [Mail] Starting Recursive Search...")
-                final_code = _recursive_search_code(driver)
-                
+                final_code = None
+                end_time = time.time() + 12
+                while time.time() < end_time and not final_code:
+                    try:
+                        driver.switch_to.default_content()
+                    except Exception:
+                        pass
+                    final_code = _recursive_search_code(driver)
+                    if final_code:
+                        break
+                    time.sleep(1)
+
                 if final_code:
                     print(f"   [Mail] -> FOUND CODE: {final_code}")
                     return final_code
                 else:
                     print("   [Mail] Code not found after deep scan.")
+                    _recover_from_hang(driver, "mail content not ready")
 
             except Exception as e:
                 print(f"   [Mail] Loop Error: {e}")

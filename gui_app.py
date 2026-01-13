@@ -3,7 +3,6 @@ from tkinter import ttk, filedialog, messagebox
 import threading
 import queue
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 # Import existing logic from project
 from config_utils import get_driver
@@ -303,12 +302,15 @@ class Instagram2FAToolApp:
             return
 
         threads_count = int(self.spin_threads.get())
+        if threads_count != 1:
+            threads_count = 1
+            self.spin_threads.set(1)
         
         self.is_running = True
         self.stop_event.clear()
         self.btn_start.config(state="disabled")
         self.btn_stop.config(state="normal")
-        self.status_var.set(f"Đang chạy với {threads_count} luồng...")
+        self.status_var.set("Dang chay theo thu tu (1 luong)...")
 
         # Lưu trạng thái Headless cho phiên chạy này để các thread con sử dụng
         self.current_headless_mode = self.var_headless.get()
@@ -328,23 +330,16 @@ class Instagram2FAToolApp:
             self.task_queue.put(iid)
 
         # Start Workers
-        threading.Thread(target=self.run_thread_pool, args=(threads_count,), daemon=True).start()
+        threading.Thread(target=self.run_thread_pool, daemon=True).start()
 
-    def run_thread_pool(self, max_workers):
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
-            while not self.task_queue.empty() and not self.stop_event.is_set():
-                if self.stop_event.is_set(): break
-                try:
-                    iid = self.task_queue.get_nowait()
-                    futures.append(executor.submit(self.process_one_account, iid))
-                except queue.Empty:
-                    break
-            
-            for f in futures:
-                if self.stop_event.is_set(): break
-                f.result() 
-        
+    def run_thread_pool(self):
+        while not self.task_queue.empty() and not self.stop_event.is_set():
+            try:
+                iid = self.task_queue.get_nowait()
+            except queue.Empty:
+                break
+            self.process_one_account(iid)
+
         self.root.after(0, self.on_finish)
 
     def process_one_account(self, iid):

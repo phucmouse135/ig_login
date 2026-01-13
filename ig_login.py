@@ -1,7 +1,7 @@
 # ig_login.py
 import time
 from selenium.webdriver.common.by import By
-from config_utils import parse_cookie_string, wait_and_click
+from config_utils import parse_cookie_string, wait_and_click, wait_dom_ready
 
 def login_instagram_via_cookie(driver, cookie_raw_string):
     """
@@ -12,7 +12,7 @@ def login_instagram_via_cookie(driver, cookie_raw_string):
     
     # Step 1: Must go to homepage first to add cookies
     driver.get("https://www.instagram.com/")
-    time.sleep(2)
+    wait_dom_ready(driver, timeout=8)
     
     # Step 2: Parse and Add Cookies
     cookies = parse_cookie_string(cookie_raw_string)
@@ -21,20 +21,23 @@ def login_instagram_via_cookie(driver, cookie_raw_string):
         
     # Step 3: Refresh to apply cookies
     driver.refresh()
-    time.sleep(5)
+    wait_dom_ready(driver, timeout=10)
+    end_time = time.time() + 6
+    while time.time() < end_time:
+        if (len(driver.find_elements(By.CSS_SELECTOR, "input[name='password']")) > 0 or 
+            len(driver.find_elements(By.CSS_SELECTOR, "input[type='password']")) > 0 or
+            len(driver.find_elements(By.CSS_SELECTOR, "input[aria-label='Password']")) > 0 or
+            len(driver.find_elements(By.XPATH, "//*[contains(text(), 'Use another profile')]")) > 0 or
+            len(driver.find_elements(By.CSS_SELECTOR, "svg[aria-label='Home']")) > 0 or 
+            len(driver.find_elements(By.CSS_SELECTOR, "svg[aria-label='Trang ch?']")) > 0 or 
+            len(driver.find_elements(By.CSS_SELECTOR, "svg[aria-label='Search']")) > 0):
+            break
+        time.sleep(0.2)
     
     # Step 4: Handle Popups (Save Info / Notifications)
     try:
-        # Popup "Save Login Info?" -> Click "Not Now"
-        btns = driver.find_elements(By.XPATH, "//button[contains(text(), 'Not Now') or contains(text(), 'Lúc khác')]")
-        if btns:
-            btns[0].click()
-            time.sleep(1)
-            
-        # Popup "Turn on Notifications?" -> Click "Not Now"
-        btns_notif = driver.find_elements(By.XPATH, "//button[contains(text(), 'Not Now') or contains(text(), 'Lúc khác')]")
-        if btns_notif:
-            btns_notif[0].click()
+        wait_and_click(driver, By.XPATH, "//button[contains(text(), 'Not Now') or contains(text(), 'Lúc khác')]", timeout=2)
+        wait_and_click(driver, By.XPATH, "//button[contains(text(), 'Not Now') or contains(text(), 'Lúc khác')]", timeout=2)
     except:
         pass
 

@@ -4,8 +4,7 @@ import re
 import pyotp
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
-from config_utils import wait_and_click, wait_and_send_keys
-from mail_handler import get_code_from_mail
+from config_utils import wait_and_click, wait_and_send_keys, wait_dom_ready, wait_element
 
 def _raise_if_change_not_allowed_yet(driver):
     """
@@ -30,13 +29,13 @@ def setup_2fa(driver, email, email_pass, target_username=None):
     """
     print(f"   [2FA] Accessing 2FA settings page (Target: {target_username})...")
     driver.get("https://accountscenter.instagram.com/password_and_security/two_factor/")
-    time.sleep(5) # Wait React Framework
+    wait_dom_ready(driver, timeout=10)
     _raise_if_change_not_allowed_yet(driver)
     
 
     # STEP 1: SELECT ACCOUNT
     print("   [2FA] Selecting account...")
-    time.sleep(3) # Wait account list
+    wait_element(driver, By.XPATH, "//div[@role='button'] | //a[@role='link']", timeout=8)
     
     clicked = False
     try:
@@ -124,7 +123,7 @@ def setup_2fa(driver, email, email_pass, target_username=None):
         if "check your email" in src or "authentication app" in src or "is on" in src:
             found_step = True
             # Wait for UI stability
-            time.sleep(3)
+            time.sleep(1)
             break
         time.sleep(1)
         
@@ -213,6 +212,49 @@ def setup_2fa(driver, email, email_pass, target_username=None):
 
         return False
 
+    def _is_email_code_checkpoint(drv, attempts=6, delay=0.6):
+        email_keywords = ["check your email", "verify email", "email", "mail"]
+        input_selectors = [
+            "input[maxlength='6']",
+            "input[placeholder*='code']",
+            "input[aria-label*='code']",
+            "input[type='number']",
+            "input[type='text']",
+        ]
+
+        for _ in range(attempts):
+            try:
+                src = drv.page_source.lower() or ""
+            except:
+                src = ""
+            try:
+                body_txt = drv.find_element(By.TAG_NAME, "body").text.lower()
+            except:
+                body_txt = ""
+
+            email_hint = (
+                any(kw in src or kw in body_txt for kw in email_keywords)
+                or "@" in src
+                or "@" in body_txt
+            )
+
+            input_found = False
+            try:
+                for sel in input_selectors:
+                    els = drv.find_elements(By.CSS_SELECTOR, sel)
+                    if any(e.is_displayed() for e in els):
+                        input_found = True
+                        break
+            except:
+                input_found = False
+
+            if email_hint and input_found:
+                return True
+
+            time.sleep(delay)
+
+        return False
+
     # Early: is 2FA already on?
     try:
         body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
@@ -226,129 +268,132 @@ def setup_2fa(driver, email, email_pass, target_username=None):
 
     # Use robust detection
     if _detect_checkpoint(driver, attempts=10, delay=1.2):
-        print("   [2FA] Checkpoint Detected: Email verify required...")
+        if not _is_email_code_checkpoint(driver, attempts=6, delay=0.6):
+            print("   [2FA] Checkpoint detected but no email code UI. Continue without mail verification.")
+        else:
+            print("   [2FA] Checkpoint Detected: Email verify required...")
 
-        # Do not refresh here: reload can hide the code input after selecting the IG account
-        time.sleep(1.5)
+            # Do not refresh here: reload can hide the code input after selecting the IG account
+            time.sleep(1.5)
 
-        # 1. Open new tab to get code (mail handler selection handled earlier)
-        mail_code = None
-        try:
-            # call chosen handler (two_fa_handler may be called with mail_source param)
-            # fallback to default mail_handler if no specialized file
+            # 1. Open new tab to get code (mail handler selection handled earlier)
+            mail_code = None
             try:
-                # prefer specialized wrappers
-                from mail_handler_mailcom import get_code_from_mailcom as _mailcom
-            except Exception:
-                _mailcom = None
-            try:
-                from mail_handler_gmx import get_code_from_gmx as _gmx
-            except Exception:
-                _gmx = None
+                # call chosen handler (two_fa_handler may be called with mail_source param)
+                # fallback to default mail_handler if no specialized file
+                try:
+                    # prefer specialized wrappers
+                    from mail_handler_mailcom import get_code_from_mailcom as _mailcom
+                except Exception:
+                    _mailcom = None
+                try:
+                    from mail_handler_gmx import get_code_from_gmx as _gmx
+                except Exception:
+                    _gmx = None
 
-            # decide using available handlers and requested param
-            # note: setup_2fa may be invoked with mail_source variable in outer scope
-            ms = locals().get('mail_source', None)
-            if ms == 'gmx' and _gmx:
-                mail_code = _gmx(driver, email, email_pass)
-            elif _mailcom:
-                mail_code = _mailcom(driver, email, email_pass)
-            else:
-                # fallback to original implementation if wrapper not present
-                from mail_handler import get_code_from_mail as _orig_mail
-                mail_code = _orig_mail(driver, email, email_pass)
-        except Exception as e:
-            print(f"   [2FA] Mail handler error: {e}")
+                # decide using available handlers and requested param
+                # note: setup_2fa may be invoked with mail_source variable in outer scope
+                ms = locals().get('mail_source', None)
+                if ms == 'gmx' and _gmx:
+                    mail_code = _gmx(driver, email, email_pass)
+                elif _mailcom:
+                    mail_code = _mailcom(driver, email, email_pass)
+                else:
+                    # fallback to original implementation if wrapper not present
+                    from mail_handler import get_code_from_mail as _orig_mail
+                    mail_code = _orig_mail(driver, email, email_pass)
+            except Exception as e:
+                print(f"   [2FA] Mail handler error: {e}")
 
-        if not mail_code:
-            raise Exception("Could not get mail code to bypass Checkpoint")
-            
-        # 2. Input code
-        # In image: Placeholder="Code"
-        js_set_mail_code = """
-            var code = arguments[0];
-            function setNativeValue(element, value) {
-                var lastValue = element.value;
-                element.value = value;
-                var event = new Event('input', { bubbles: true });
-                var tracker = element._valueTracker;
-                if (tracker) {
-                    tracker.setValue(lastValue);
-                }
-                element.dispatchEvent(event);
-            }
-            var inputs = document.querySelectorAll("input[type='text'], input[type='number'], input");
-            for (var i = 0; i < inputs.length; i++) {
-                if (inputs[i] && inputs[i].offsetParent !== null) {
-                    inputs[i].focus();
-                    setNativeValue(inputs[i], code);
-                    return true;
-                }
-            }
-            return false;
-        """
-        try:
-            # Find input
-            inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text'], input[type='number']")
-            entered = False
-            for inp in inputs:
-                if inp.is_displayed():
-                    try:
-                        inp.clear()
-                    except:
-                        pass
-                    inp.send_keys(str(mail_code))
-                    entered = True
-                    break
-            
-            if not entered:
-                driver.execute_script(js_set_mail_code, str(mail_code))
-        except Exception as e:
-            print(f"   [2FA] Input error: {e}")
-
-        time.sleep(2)
-        
-        # Verify mail code input value
-        verify_mail_js = """
-            var code = (arguments[0] || '').replace(/\\s+/g, '');
-            var inputs = document.querySelectorAll('input');
-            for (var i = 0; i < inputs.length; i++) {
-                var val = (inputs[i].value || '').replace(/\\s+/g, '');
-                if (val === code) return true;
-            }
-            return false;
-        """
-        is_mail_filled = driver.execute_script(verify_mail_js, str(mail_code))
-        if not is_mail_filled:
-            print("   [2FA] Warning: Email code not detected in input. Retrying via JS...")
-            driver.execute_script(js_set_mail_code, str(mail_code))
-            time.sleep(1)
-            is_mail_filled = driver.execute_script(verify_mail_js, str(mail_code))
-
-        if not is_mail_filled:
-            raise Exception("MAIL CODE ENTRY FAILED: Input value mismatch.")
-        
-        # 3. Click Continue
-        print("   [2FA] Clicking Continue...")
-        if not wait_and_click(driver, By.XPATH, "//div[@role='button']//span[contains(text(), 'Continue') or contains(text(), 'Tiếp')]"):
-            # Fallback
-            try:
-                driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-            except:
-                pass
+            if not mail_code:
+                raise Exception("Could not get mail code to bypass Checkpoint")
                 
-        time.sleep(8)
-        try:
-            body_text_check = driver.find_element(By.TAG_NAME, "body").text.lower()
-            if ("code isn't right" in body_text_check or
-                "wrong code" in body_text_check or
-                "incorrect" in body_text_check or
-                "please check the code" in body_text_check):
-                raise Exception("WRONG EMAIL CODE (Instagram rejected).")
-        except Exception as e:
-            if "WRONG EMAIL CODE" in str(e):
-                raise
-        _raise_if_change_not_allowed_yet(driver)
+            # 2. Input code
+            # In image: Placeholder="Code"
+            js_set_mail_code = """
+                var code = arguments[0];
+                function setNativeValue(element, value) {
+                    var lastValue = element.value;
+                    element.value = value;
+                    var event = new Event('input', { bubbles: true });
+                    var tracker = element._valueTracker;
+                    if (tracker) {
+                        tracker.setValue(lastValue);
+                    }
+                    element.dispatchEvent(event);
+                }
+                var inputs = document.querySelectorAll("input[type='text'], input[type='number'], input");
+                for (var i = 0; i < inputs.length; i++) {
+                    if (inputs[i] && inputs[i].offsetParent !== null) {
+                        inputs[i].focus();
+                        setNativeValue(inputs[i], code);
+                        return true;
+                    }
+                }
+                return false;
+            """
+            try:
+                # Find input
+                inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text'], input[type='number']")
+                entered = False
+                for inp in inputs:
+                    if inp.is_displayed():
+                        try:
+                            inp.clear()
+                        except:
+                            pass
+                        inp.send_keys(str(mail_code))
+                        entered = True
+                        break
+                
+                if not entered:
+                    driver.execute_script(js_set_mail_code, str(mail_code))
+            except Exception as e:
+                print(f"   [2FA] Input error: {e}")
+
+            time.sleep(2)
+            
+            # Verify mail code input value
+            verify_mail_js = """
+                var code = (arguments[0] || '').replace(/\\s+/g, '');
+                var inputs = document.querySelectorAll('input');
+                for (var i = 0; i < inputs.length; i++) {
+                    var val = (inputs[i].value || '').replace(/\\s+/g, '');
+                    if (val === code) return true;
+                }
+                return false;
+            """
+            is_mail_filled = driver.execute_script(verify_mail_js, str(mail_code))
+            if not is_mail_filled:
+                print("   [2FA] Warning: Email code not detected in input. Retrying via JS...")
+                driver.execute_script(js_set_mail_code, str(mail_code))
+                time.sleep(1)
+                is_mail_filled = driver.execute_script(verify_mail_js, str(mail_code))
+
+            if not is_mail_filled:
+                raise Exception("MAIL CODE ENTRY FAILED: Input value mismatch.")
+            
+            # 3. Click Continue
+            print("   [2FA] Clicking Continue...")
+            if not wait_and_click(driver, By.XPATH, "//div[@role='button']//span[contains(text(), 'Continue') or contains(text(), 'Tiếp')]"):
+                # Fallback
+                try:
+                    driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
+                except:
+                    pass
+                    
+            time.sleep(8)
+            try:
+                body_text_check = driver.find_element(By.TAG_NAME, "body").text.lower()
+                if ("code isn't right" in body_text_check or
+                    "wrong code" in body_text_check or
+                    "incorrect" in body_text_check or
+                    "please check the code" in body_text_check):
+                    raise Exception("WRONG EMAIL CODE (Instagram rejected).")
+            except Exception as e:
+                if "WRONG EMAIL CODE" in str(e):
+                    raise
+            _raise_if_change_not_allowed_yet(driver)
         
     found_step = False
     
@@ -358,7 +403,7 @@ def setup_2fa(driver, email, email_pass, target_username=None):
         if "check your email" in src or "authentication app" in src or "is on" in src:
             found_step = True
             # Wait for UI stability
-            time.sleep(3)
+            time.sleep(1)
             break
         time.sleep(1)
         
@@ -787,6 +832,28 @@ def setup_2fa(driver, email, email_pass, target_username=None):
     
     robust_click(next_xpaths, "Next")
     
+    print("   [2FA] Waiting for confirmation screen to render...")
+    otp_input_selectors = [
+        "input[maxlength='6']",
+        "input[placeholder='Enter code']",
+        "input[placeholder='Code']",
+        "input[aria-label='Code']",
+        "input[aria-label='Security Code']",
+    ]
+    for _ in range(12):
+        time.sleep(1)
+        try:
+            still_visible = False
+            for sel in otp_input_selectors:
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                if any(e.is_displayed() for e in els):
+                    still_visible = True
+                    break
+            if not still_visible:
+                break
+        except:
+            break
+
     # --- WAIT FOR 'DONE' (IMPORTANT) ---
     print("   [2FA] Waiting for OTP confirmation (Wait Done button)...")
     success_confirmed = False
