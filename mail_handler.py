@@ -4,12 +4,11 @@ import re
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
 def wait_element(driver, by, value, timeout=10):
     """Hàm chờ element xuất hiện và trả về element đó"""
-    # Manual wait thay vì WebDriverWait
+    # Manual wait (polling)
     steps = int(timeout / 0.5)
     for _ in range(steps):
         try:
@@ -21,43 +20,183 @@ def wait_element(driver, by, value, timeout=10):
     return None
 
 
-def _find_rows_with_frame_search(driver):
-    """Tìm table rows, nếu không thấy thì thử switch vào iframe"""
-    # 1. Thử ở context hiện tại
+def _stop_loading(driver) -> None:
+    try:
+        driver.execute_script("window.stop();")
+    except Exception:
+        pass
+
+
+def _safe_get(driver, url, timeout=20) -> bool:
+    try:
+        driver.set_page_load_timeout(timeout)
+    except Exception:
+        pass
+    try:
+        driver.get(url)
+        return True
+    except TimeoutException:
+        _stop_loading(driver)
+        return False
+    except WebDriverException:
+        _stop_loading(driver)
+        return False
+
+
+def _safe_refresh(driver, timeout=20) -> bool:
+    try:
+        driver.set_page_load_timeout(timeout)
+    except Exception:
+        pass
+    try:
+        driver.refresh()
+        return True
+    except TimeoutException:
+        _stop_loading(driver)
+        return False
+    except WebDriverException:
+        _stop_loading(driver)
+        return False
+
+
+def _wait_dom_ready(driver, timeout=10, poll=0.5) -> bool:
+    end_time = time.time() + timeout
+    while time.time() < end_time:
+        try:
+            if driver.execute_script("return document.readyState") == "complete":
+                return True
+        except Exception:
+            pass
+        time.sleep(poll)
+    _stop_loading(driver)
+    return False
+
+
+def _find_rows_with_frame_search(driver, verbose=True):
+    """Find table rows, try iframe if not found"""
+    # 1. Try current context
     rows = driver.find_elements(By.XPATH, "//table[@id='mail-list']//tbody/tr")
-    print(f"   [Mail] Tìm thấy {len(rows)} dòng mail ở context chính.")
+    if verbose:
+        print(f"   [Mail] Found {len(rows)} rows in main context.")
     if rows: return rows
 
-    # 2. Nếu không thấy, thử tìm iframe chứa mail-list
+    # 2. Try iframe
     frames = driver.find_elements(By.TAG_NAME, "iframe")
     for frame in frames:
         try:
             driver.switch_to.frame(frame)
             rows = driver.find_elements(By.XPATH, "//table[@id='mail-list']//tbody/tr")
             if rows:
-                print(f"   [Mail] Found mail list in iframe!")
+                if verbose:
+                    print(f"   [Mail] Found mail list in iframe!")
                 return rows
-            # Nếu không tìm thấy, thử tìm children frames (nested)
-            # Tuy nhiên mail.com thường chỉ 1 level. 
-            # Revert để thử frame tiếp theo
+            # If not found, try children frames (nested)
+            # Revert to try next frame
             driver.switch_to.default_content() 
         except:
             driver.switch_to.default_content()
     
     return []
 
-def _find_target_mail_row(driver, target_subject):
+def _wait_for_mail_rows(driver, timeout=12):
+    end_time = time.time() + timeout
+    while time.time() < end_time:
+        rows = _find_rows_with_frame_search(driver, verbose=False)
+        if rows:
+            return rows
+        time.sleep(0.5)
+    return []
+
+
+def _recover_from_hang(driver, reason=""):
+    msg = f" ({reason})" if reason else ""
+    print(f"   [Mail] Page seems stuck{msg}. Attempting recovery...")
+    _stop_loading(driver)
+    time.sleep(1)
+    if not _safe_refresh(driver):
+        _safe_get(driver, "https://www.mail.com/")
+    _wait_dom_ready(driver, timeout=8)
+
+
+def _ensure_logged_in(driver, email, password) -> bool:
+    rows = _wait_for_mail_rows(driver, timeout=4)
+    if rows:
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+        return True
+
+    def _try_login() -> bool:
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+
+        login_btn = wait_element(driver, By.ID, "login-button", timeout=6)
+        if login_btn:
+            driver.execute_script("arguments[0].click();", login_btn)
+            time.sleep(1)
+
+        email_inp = wait_element(driver, By.ID, "login-email", timeout=6)
+        pass_inp = wait_element(driver, By.ID, "login-password", timeout=6)
+        if not email_inp or not pass_inp:
+            return False
+
+        try:
+            email_inp.clear()
+        except Exception:
+            pass
+        email_inp.send_keys(email)
+
+        try:
+            pass_inp.clear()
+        except Exception:
+            pass
+        pass_inp.send_keys(password)
+
+        time.sleep(1)
+        try:
+            driver.find_element(By.CSS_SELECTOR, ".login-submit").click()
+        except Exception:
+            pass_inp.send_keys(Keys.ENTER)
+
+        print("   [Mail] Login clicked, waiting redirect...")
+        _wait_dom_ready(driver, timeout=10)
+        return True
+
+    if not _try_login():
+        _recover_from_hang(driver, "login form not ready")
+        if not _try_login():
+            print("   [Mail] Login form still not ready.")
+            return False
+
+    rows = _wait_for_mail_rows(driver, timeout=8)
+    try:
+        driver.switch_to.default_content()
+    except Exception:
+        pass
+    if rows:
+        return True
+
+    if "login" in driver.current_url or "logout" in driver.current_url:
+        print("   [Mail] Login FAILED.")
+        return False
+    return True
+
+def _find_target_mail_row(driver, target_subject, rows=None):
     """
-    Thuật toán mới (User Request):
-    - Có hỗ trợ tìm trong IFRAME.
-    - Tìm mail chưa có class 'marked' (Unread).
-    - Check Sender/Subject có 'Instagram'.
-    - Check Subject có 'Authenticate your account'.
+    New Algorithm:
+    - Support IFRAME search.
+    - Find mail without 'marked' class (Unread).
+    - Check Sender/Subject has 'Instagram'.
+    - Check Subject has 'Authenticate your account'.
     """
     try:
-        # Sử dụng hàm tìm kiếm thông minh (có check iframe)
-        rows = _find_rows_with_frame_search(driver)
-        print(f"   [Mail] Tìm thấy {len(rows)} dòng mail trong Inbox.")
+        # Smart search
+        if rows is None:
+            rows = _find_rows_with_frame_search(driver)
+        print(f"   [Mail] Found {len(rows)} rows in Inbox.")
     except Exception as e:
         print(f"   [Mail] Error finding rows: {e}")
         return None
@@ -65,22 +204,22 @@ def _find_target_mail_row(driver, target_subject):
     if not rows:
         return None
 
-    print(f"   [Mail] Đang duyệt {len(rows)} dòng trong Inbox (Bỏ qua TimeCheck)...")
+    print(f"   [Mail] Scanning {len(rows)} rows in Inbox...")
 
     for idx, row in enumerate(rows):
-        # 1. Bỏ qua Ad (Ad thường chứa thẻ 'th' hoặc iframe trực tiếp)
+        # 1. Skip Ad
         if row.find_elements(By.TAG_NAME, "th"):
             continue
 
         try:
             row_desc = _describe_row_brief(row)
 
-            # 2. Check Unread (Quan trọng nhất: Phải là mail chưa đọc - Không có class marked)
+            # 2. Check Unread
             if not _row_is_unread(row):
-                # print(f"     [Row {idx}] Đã đọc -> Skip.")
+                # print(f"     [Row {idx}] Read -> Skip.")
                 continue
             
-            # Lấy thông tin Sender và Subject
+            # Get Sender and Subject
             try:
                 name_el = row.find_element(By.CSS_SELECTOR, "div.name")
                 sender_txt = (name_el.text + " " + (name_el.get_attribute("title") or "")).lower()
@@ -91,18 +230,18 @@ def _find_target_mail_row(driver, target_subject):
                 subj_txt = (subj_el.text + " " + (subj_el.get_attribute("title") or "")).lower()
             except: subj_txt = ""
             
-            # 3. Check Condition: (Sender=Instagram OR Subject=Instagram) AND Subject="Authenticate your account"
+            # 3. Check Condition
             is_instagram = "instagram" in sender_txt or "instagram" in subj_txt
             is_target_subj = (target_subject.lower() in subj_txt) if target_subject else True
             
             if is_instagram and is_target_subj:
-                print(f"   [Mail] => TÌM THẤY MAIL (Row {idx}): {row_desc}")
+                print(f"   [Mail] => FOUND MAIL (Row {idx}): {row_desc}")
                 return row
             else:
-                 print(f"     [Row {idx}] Unread nhưng không khớp: Instagram={is_instagram}, Subj='{target_subject}' -> {is_target_subj}")
+                 print(f"     [Row {idx}] Unread but logic mismatch: Instagram={is_instagram}, Subj='{target_subject}' -> {is_target_subj}")
 
         except Exception as e:
-            print(f"     [Row {idx}] Lỗi parse row: {e}")
+            print(f"     [Row {idx}] Error parse row: {e}")
             continue
 
     return None
@@ -255,21 +394,20 @@ def extract_instagram_code(text: str) -> str | None:
     
     return None
 
-# --- HÀM CHÍNH ---
-def get_code_from_mail(driver, email, password):
+# --- HÀM CHÍNH (INTERNAL) ---
+def _get_code_from_mail_attempt(driver, email, password):
     original_window = driver.current_window_handle
     driver.execute_script("window.open('');")
     driver.switch_to.window(driver.window_handles[-1])
     
-    print(f"   [Mail] Đang truy cập: {email}...")
+    print(f"   [Mail] Accessing: {email}...")
     
     try:
-        try:
-            driver.get("https://www.mail.com/")
-        except:
-            driver.execute_script("window.stop();")
-        
-        time.sleep(3)
+        if not _safe_get(driver, "https://www.mail.com/"):
+            print("   [Mail] Initial load timeout, retrying...")
+            _safe_get(driver, "https://www.mail.com/")
+        _wait_dom_ready(driver, timeout=10)
+        time.sleep(1)
 
         # 1. Popup Cookie
         try:
@@ -286,68 +424,50 @@ def get_code_from_mail(driver, email, password):
         except: pass
 
         # 2. Login
-        print("   [Mail] Bắt đầu Login...")
-        login_btn = wait_element(driver, By.ID, "login-button")
-        if login_btn: driver.execute_script("arguments[0].click();", login_btn)
-        
-        time.sleep(1)
-        wait_element(driver, By.ID, "login-email").send_keys(email)
-        
-        pass_inp = wait_element(driver, By.ID, "login-password")
-        pass_inp.send_keys(password)
-        
-        time.sleep(1)
-        try:
-            driver.find_element(By.CSS_SELECTOR, ".login-submit").click()
-        except:
-            pass_inp.send_keys(Keys.ENTER)
-
-        print("   [Mail] Đã nhấn Login, chờ chuyển hướng...")
-        time.sleep(8)
-
-        # 3. Check Login
-        if "login" in driver.current_url or "logout" in driver.current_url:
-            print("   [Mail] Login thất bại.")
+        print("   [Mail] Starting Login...")
+        if not _ensure_logged_in(driver, email, password):
             return None
 
-        # 4. Quét Mail
-        print("   [Mail] Đang quét Inbox (Tìm mail đầu tiên)...")
+        # 4. Scan Mail
+        print("   [Mail] Scanning Inbox (Finding first mail)...")
         target_subject = "Authenticate your account"
 
         for i in range(5):
             try:
-                print(f"   [Mail] Lần quét {i+1}...")
+                print(f"   [Mail] Scan # {i+1}...")
                 driver.switch_to.default_content()
                 
                 # REFRESH PAGE LOGIC ROBUST
-                driver.refresh()
-                # Chờ load xong
-                try:
-                    WebDriverWait(driver, 15).until(
-                        lambda d: d.execute_script('return document.readyState') == 'complete'
-                    )
-                except: pass
-                time.sleep(5) # Thêm thời gian chờ cứng để load AJAX mail list
+                if not _safe_refresh(driver):
+                    print("   [Mail] Refresh timeout, trying recovery...")
+                    _recover_from_hang(driver, "refresh timeout")
+                _wait_dom_ready(driver, timeout=12)
 
-                # --- LOGIC MỚI: DUYỆT TABLE TÌM UNREAD MAIL ---
-                target_row = _find_target_mail_row(driver, target_subject)
-
-                if not target_row:
-                    print(f"   [Mail] Chưa thấy mail phù hợp (Unread + Subject '{target_subject}' + Mới) trong lần quét này.")
+                rows = _wait_for_mail_rows(driver, timeout=12)
+                if not rows:
+                    print("   [Mail] Inbox not ready, possible hang.")
+                    _recover_from_hang(driver, "inbox not ready")
+                    if not _ensure_logged_in(driver, email, password):
+                        return None
                     continue
 
-                # Click mở mail
+                # --- NEW LOGIC: FIND UNREAD MAIL ---
+                target_row = _find_target_mail_row(driver, target_subject, rows=rows)
+
+                if not target_row:
+                    print(f"   [Mail] No suitable mail found (Unread + Subject '{target_subject}' + New) in this scan.")
+                    continue
+
+                # Click open
                 _click_mail_row(driver, target_row)
                 
-                # Check xem đã mở mail chưa (Check xem list có bị ẩn hay nội dung có hiện lên chưa?)
-                # Hoặc đơn giản là chờ lâu hơn chút
-                print("   [Mail] Đang đợi nội dung mail load...")
-                time.sleep(8) 
+                # Check opened
+                print("   [Mail] Waiting for mail content...")
 
-                # --- LOGIC MỚI: TÌM KIẾM ĐỆ QUY & TRÍCH XUẤT TRỰC TIẾP ---
+                # --- NEW LOGIC: RECURSIVE SEARCH ---
                 def _attempt_extract_in_current_frame(drv):
-                    # 1. Thử XPath cụ thể user yêu cầu (Deep structure)
-                    # Mục tiêu: P[4] chứa code
+                    # 1. Try Specific XPath
+                    # Target: P[4] has code
                     xpath_deep = '//*[@id="email_content"]/table/tbody/tr[4]/td/table/tbody/tr/td/table/tbody/tr[2]/td/table/tbody/tr/td/table/tbody/tr/td[2]/table/tbody/tr/td/p[4]'
                     try:
                         el = drv.find_element(By.XPATH, xpath_deep)
@@ -358,20 +478,20 @@ def get_code_from_mail(driver, email, password):
                         if code: return code
                     except: pass
 
-                    # 2. Thử #email_content container
+                    # 2. Try #email_content container
                     try:
                         div = drv.find_element(By.ID, "email_content")
                         code = extract_instagram_code(div.get_attribute("innerHTML"))
                         if code: return code
                     except: pass
 
-                    # 3. Thử quét toàn bộ Body (Fallback)
+                    # 3. Try Body scan (Fallback)
                     try:
                         body_txt = drv.find_element(By.TAG_NAME, "body").text
-                        # Chỉ check nếu có keywords Instagram
+                        # One check if instagram keywords exist
                         if "instagram" in body_txt.lower() or "confirm" in body_txt.lower():
                             body_html = drv.find_element(By.TAG_NAME, "body").get_attribute("innerHTML")
-                            code = extract_instagram_code(body_html) # Ưu tiên HTML
+                            code = extract_instagram_code(body_html) # Priority HTML
                             if not code: code = extract_instagram_code(body_txt)
                             if code: return code
                     except: pass
@@ -379,11 +499,11 @@ def get_code_from_mail(driver, email, password):
                     return None
 
                 def _recursive_search_code(drv, depth=0):
-                    # 1. Check frame hiện tại
+                    # 1. Check current frame
                     found_code = _attempt_extract_in_current_frame(drv)
                     if found_code: return found_code
                     
-                    # 2. Check iframes con
+                    # 2. Check child iframes
                     if depth < 4: # Max depth 4
                         frames = drv.find_elements(By.TAG_NAME, "iframe")
                         # print(f"     [Debug] Depth {depth}: Found {len(frames)} iframes.")
@@ -400,25 +520,62 @@ def get_code_from_mail(driver, email, password):
                                 except: pass
                     return None
 
-                print("   [Mail] Bắt đầu quét nội dung đệ quy (Recursive Search)...")
-                final_code = _recursive_search_code(driver)
-                
+                print("   [Mail] Starting Recursive Search...")
+                final_code = None
+                end_time = time.time() + 12
+                while time.time() < end_time and not final_code:
+                    try:
+                        driver.switch_to.default_content()
+                    except Exception:
+                        pass
+                    final_code = _recursive_search_code(driver)
+                    if final_code:
+                        break
+                    time.sleep(1)
+
                 if final_code:
-                    print(f"   [Mail] -> TÌM THẤY CODE: {final_code}")
+                    print(f"   [Mail] -> FOUND CODE: {final_code}")
                     return final_code
                 else:
-                    print("   [Mail] Không tìm thấy code sau khi quét sâu các iframe.")
+                    print("   [Mail] Code not found after deep scan.")
+                    _recover_from_hang(driver, "mail content not ready")
 
             except Exception as e:
-                print(f"   [Mail] Lỗi vòng lặp: {e}")
+                print(f"   [Mail] Loop Error: {e}")
 
         return None
 
     except Exception as e:
-        print(f"   [Mail] Crash lỗi: {e}")
+        print(f"   [Mail] Crash Error: {e}")
         return None
 
     finally:
+        # Clean up tab mail
         if len(driver.window_handles) > 1:
-            driver.close()
-            driver.switch_to.window(original_window)
+            try:
+                driver.close()
+            except: pass
+            
+            try:
+                driver.switch_to.window(original_window)
+            except: pass
+
+def get_code_from_mail(driver, email, password):
+    """
+    Wrapper: Retry full process (tab -> login -> get code) up to 3 times.
+    """
+    for attempt in range(1, 4):
+        print(f"   [Mail] (Attempt {attempt}/3) Starting mail code retrieval...")
+        try:
+            code = _get_code_from_mail_attempt(driver, email, password)
+            if code:
+                return code
+        except Exception as e:
+            print(f"   [Mail] Exception at attempt {attempt}: {e}")
+        
+        if attempt < 3:
+            print("   [Mail] Failed or error. Waiting 5s before retry...")
+            time.sleep(5)
+    
+    print("   [Mail] => Failed after 3 attempts. No code retrieved.")
+    return None

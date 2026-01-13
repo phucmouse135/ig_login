@@ -7,96 +7,93 @@ from ig_login import login_instagram_via_cookie
 from two_fa_handler import setup_2fa
 from colorama import Fore, init
 
-# Khởi tạo màu terminal
+# Init terminal colors
 init(autoreset=True)
 
-# Khóa luồng để ghi file không bị lỗi dòng
+# Thread lock for file writing safety
 file_lock = threading.Lock()
 
 def process_account(line_data):
-    """Xử lý 1 dòng data account"""
+    """Process 1 account line"""
     line_data = line_data.strip()
     if not line_data: return
 
-    # Tách data theo tab
+    # Split data by tab
     parts = line_data.split('\t')
     
-    # Kiểm tra độ dài data (Data mẫu có user, pass, 2 ô trống, email, pass mail... cookie)
-    # Lunamaya57 [tab] pass [tab] EMPTY [tab] EMPTY [tab] email...
+    # Checks lengths of data
     if len(parts) < 5:
-        print(Fore.RED + f"[SKIP] Dòng lỗi format: {line_data[:20]}...")
+        print(Fore.RED + f"[SKIP] Format error: {line_data[:20]}...")
         return
 
     # print(parts)
     username = parts[0]
-    email = parts[3]      # Vị trí email (Index 4 dựa trên mẫu bạn gửi)
-    email_pass = parts[4] # Vị trí pass email
+    email = parts[3]      # Email index
+    email_pass = parts[4] # Email pass index
     
-    # Cookie thường ở cuối cùng
+    # Cookie is usually last
     cookie_str = parts[-1]
 
-    print(Fore.CYAN + f"[{username}] Bắt đầu xử lý...")
+    print(Fore.CYAN + f"[{username}] Start processing...")
     driver = None
     result_to_save = None
     
     result_to_save = None
     
-    # Retry logic: 3 lần login
+    # Retry logic: 3 times login
     MAX_RETRIES = 3
     for attempt in range(1, MAX_RETRIES + 1):
         driver = None
         try:
-            print(Fore.YELLOW + f"[{username}] Login thử lần {attempt}...")
-            # 1. Khởi tạo Browser (Mỗi lần retry là 1 browser mới sạch sẽ)
+            print(Fore.YELLOW + f"[{username}] Login attempt {attempt}...")
+            # 1. Initialize Browser
             driver = get_driver(headless=True) 
             
-            # 2. Login Instagram (Sẽ raise Exception nếu fail)
+            # 2. Login Instagram
             if login_instagram_via_cookie(driver, cookie_str):
                 
-                # 3. Setup 2FA & Lấy Key
-                print(Fore.CYAN + f"[{username}] Đang lấy 2FA...")
+                # 3. Setup 2FA & Get Key
+                print(Fore.CYAN + f"[{username}] Getting 2FA...")
                 secret_key = setup_2fa(driver, email, email_pass)
                 
-                # 4. Lưu kết quả
+                # 4. Save result
                 result_to_save = secret_key
-                print(Fore.GREEN + f"[{username}] THÀNH CÔNG! Key: {secret_key}")
+                print(Fore.GREEN + f"[{username}] SUCCESS! Key: {secret_key}")
                 
-                # Thành công thì quit và break loop check login
+                # Success -> quit and break
                 try: driver.quit()
                 except: pass
                 driver = None
                 break 
 
         except Exception as e:
-            print(Fore.RED + f"[{username}] Lỗi lần {attempt}: {str(e)}")
+            print(Fore.RED + f"[{username}] Error attempt {attempt}: {str(e)}")
             
-            # Đóng browser hiện tại để clear session/cache cho lần sau
+            # Close browser
             if driver:
                 try: driver.quit()
                 except: pass
                 driver = None
             
-            # Nếu là lần cuối cùng thì mới ghi nhận lỗi chính thức
+            # If last attempt, confirm failure
             if attempt == MAX_RETRIES:
                 error_str = str(e).replace("\n", " ").replace("\t", " ")
                 result_to_save = f"ERROR: {error_str}"
-                print(Fore.RED + f"[{username}] => XÁC NHẬN THẤT BẠI sau 3 lần.")
+                print(Fore.RED + f"[{username}] => CONFIRMED FAILURE after 3 tries.")
     
-    # Logic ghi file được chuyển xuống finally ở dưới...
+    # Logic for file writing has been moved down...
     try:
-        pass # Placeholder để giữ cấu trúc indentation nếu cần, nhưng thực tế đoạn dưới là finally của hàm process_account (nhưng process_account ko có try/finally to đùng, mà là logic tuần tự)
-             # Sửa lại: Do đoạn code cũ có `try... except... finally`, ta đã thay thế cụm `try` đó bằng vòng `for` + `try` lồng nhau.
-             # Ta sẽ xóa khối finally cũ và thay bằng logic ghi file check null trực tiếp sau vòng for.
+        pass 
             
     finally:
         pass # Dummy
 
-    # --- PHẦN GHI FILE OUTPUT ---
-    # Kiểm tra nếu result_to_save chưa có giá trị (do exception full 3 lần)
+    # --- OUTPUT WRITING ---
+    # Check if result_to_save is empty (full 3 exceptions)
     if not result_to_save:
             result_to_save = "UNKNOWN_ERROR"
 
-    # Đảm bảo list parts có đủ chỗ để gán vào index 2
+    # Ensure parts list has enough space to assign to index 2
     while len(parts) <= 2:
             parts.append("")
         
@@ -120,19 +117,19 @@ def main():
         with open("input.txt", "r", encoding="utf-8") as f:
             lines = f.readlines()
     except FileNotFoundError:
-        print("Lỗi: Không tìm thấy file input.txt")
+        print("Error: input.txt not found")
         return
 
-    # SỐ LUỒNG CHẠY ĐỒNG THỜI (Thread)
-    # Máy yếu thì để 2-3, máy khỏe để 5-10
+    # NUMBER OF THREADS
+    # 2-3 for weak PC, 5-10 for strong PC
     NUM_THREADS = 1 
     
-    print(f"Đang chạy {len(lines)} acc với {NUM_THREADS} luồng...")
+    print(f"Running {len(lines)} accounts with {NUM_THREADS} threads...")
     
     with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
         executor.map(process_account, lines)
 
-    print("--- HOÀN TẤT ---")
+    print("--- COMPLETED ---")
 
 if __name__ == "__main__":
     main()
