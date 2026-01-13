@@ -23,6 +23,37 @@ def _raise_if_change_not_allowed_yet(driver):
         )
         print("   [2FA] ERROR: " + msg)
         raise RuntimeError(msg)
+
+def _page_signature(driver):
+    try:
+        ready = driver.execute_script("return document.readyState")
+    except Exception:
+        ready = "na"
+    try:
+        src_len = len(driver.page_source or "")
+    except Exception:
+        src_len = -1
+    return f"{ready}|{src_len}"
+
+def _refresh_if_stuck(driver, last_sig, last_change_ts, stall_seconds=25, max_refresh=1, refresh_count=0):
+    now = time.time()
+    sig = last_sig
+    try:
+        sig = _page_signature(driver)
+    except Exception:
+        pass
+    if sig != last_sig:
+        return sig, now, refresh_count, False
+    if now - last_change_ts >= stall_seconds and refresh_count < max_refresh:
+        print("   [2FA] Page stuck too long. Reloading...")
+        try:
+            driver.refresh()
+            wait_dom_ready(driver, timeout=10)
+        except Exception:
+            pass
+        return sig, time.time(), refresh_count + 1, True
+    return sig, last_change_ts, refresh_count, False
+
 def setup_2fa(driver, email, email_pass, target_username=None):
     """
     Execute 2FA setup process: Enable 2FA -> Get Key -> Confirm -> Return Key.
@@ -118,13 +149,22 @@ def setup_2fa(driver, email, email_pass, target_username=None):
     found_step = False
     
     # Increase wait to 60s
-    for _ in range(60): 
-        src = driver.page_source.lower()
+    sig = _page_signature(driver)
+    last_change = time.time()
+    refresh_count = 0
+    for _ in range(60):
+        try:
+            src = driver.page_source.lower()
+        except Exception:
+            src = ""
         if "check your email" in src or "authentication app" in src or "is on" in src:
             found_step = True
             # Wait for UI stability
             time.sleep(1)
             break
+        sig, last_change, refresh_count, _ = _refresh_if_stuck(
+            driver, sig, last_change, stall_seconds=25, max_refresh=1, refresh_count=refresh_count
+        )
         time.sleep(1)
         
     if not found_step:
@@ -398,13 +438,22 @@ def setup_2fa(driver, email, email_pass, target_username=None):
     found_step = False
     
     # Increase wait to 60s
-    for _ in range(60): 
-        src = driver.page_source.lower()
+    sig = _page_signature(driver)
+    last_change = time.time()
+    refresh_count = 0
+    for _ in range(60):
+        try:
+            src = driver.page_source.lower()
+        except Exception:
+            src = ""
         if "check your email" in src or "authentication app" in src or "is on" in src:
             found_step = True
             # Wait for UI stability
             time.sleep(1)
             break
+        sig, last_change, refresh_count, _ = _refresh_if_stuck(
+            driver, sig, last_change, stall_seconds=25, max_refresh=1, refresh_count=refresh_count
+        )
         time.sleep(1)
         
     if not found_step:
@@ -854,6 +903,59 @@ def setup_2fa(driver, email, email_pass, target_username=None):
         except:
             break
 
+    def _otp_input_visible():
+        for sel in otp_input_selectors:
+            try:
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                if any(e.is_displayed() for e in els):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _quick_fill_otp(code):
+        if not _otp_input_visible():
+            return False
+        for sel in otp_input_selectors:
+            try:
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                for el in els:
+                    if el.is_displayed():
+                        try:
+                            el.clear()
+                        except Exception:
+                            pass
+                        try:
+                            el.click()
+                        except Exception:
+                            pass
+                        el.send_keys(str(code))
+                        return True
+            except Exception:
+                pass
+        js_code = """
+            var otp = arguments[0];
+            var inputs = document.querySelectorAll("input[maxlength='6'], input[placeholder*='code'], input[aria-label*='Code']");
+            for (var i = 0; i < inputs.length; i++) {
+                if (inputs[i].offsetParent !== null) {
+                    inputs[i].focus();
+                    inputs[i].value = otp;
+                    var event = new Event('input', { bubbles: true });
+                    var tracker = inputs[i]._valueTracker;
+                    if (tracker) {
+                        tracker.setValue("");
+                    }
+                    inputs[i].dispatchEvent(event);
+                    return true;
+                }
+            }
+            return false;
+        """
+        try:
+            return bool(driver.execute_script(js_code, str(code)))
+        except Exception:
+            return False
+
     # --- WAIT FOR 'DONE' (IMPORTANT) ---
     print("   [2FA] Waiting for OTP confirmation (Wait Done button)...")
     success_confirmed = False
@@ -864,6 +966,10 @@ def setup_2fa(driver, email, email_pass, target_username=None):
         "//div[@role='button']//span[contains(text(), 'Done')]",
         "//div[@role='button']//span[contains(text(), 'Xong')]"
     ]
+
+    done_wait_sig = _page_signature(driver)
+    done_wait_change = time.time()
+    done_wait_refreshes = 0
 
     for i in range(15): # Loop 15 times (15-20s)
         time.sleep(1.5)
@@ -892,6 +998,19 @@ def setup_2fa(driver, email, email_pass, target_username=None):
             print("   [2FA] => Done button found (OTP OK).")
             break
             
+        done_wait_sig, done_wait_change, done_wait_refreshes, did_refresh = _refresh_if_stuck(
+            driver,
+            done_wait_sig,
+            done_wait_change,
+            stall_seconds=25,
+            max_refresh=1,
+            refresh_count=done_wait_refreshes,
+        )
+        if did_refresh:
+            if _quick_fill_otp(otp_code):
+                robust_click(next_xpaths, "Next (After Reload)")
+            continue
+
         # If not done, maybe Next click failed, retry Next
         if i % 3 == 0 and i > 0:
              print(f"   [2FA] Done not found, retrying Next {int(i/3)}...")

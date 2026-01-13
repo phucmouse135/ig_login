@@ -6,7 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 # Import existing logic from project
-from config_utils import get_driver
+from config_utils import get_driver, ensure_chromedriver
 from ig_login import login_instagram_via_cookie
 from two_fa_handler import setup_2fa
 
@@ -282,18 +282,24 @@ class Instagram2FAToolApp:
             messagebox.showerror("Error", str(e))
 
     def update_progress_ui(self):
-        self.lbl_progress.config(text=f"Progress: {self.processed_count}/{self.total_input}")
-        self.lbl_running.config(text=f"Running: {self.running_count}")
-        self.lbl_success.config(text=f"Success: {self.success_count}")
+        with self.results_lock:
+            processed = self.processed_count
+            total = self.total_input
+            running = self.running_count
+            success = self.success_count
+        self.lbl_progress.config(text=f"Progress: {processed}/{total}")
+        self.lbl_running.config(text=f"Running: {running}")
+        self.lbl_success.config(text=f"Success: {success}")
 
     def start_process(self):
         if self.is_running: return
         
         # Reset counts for new run session (optional, or keep accumulating?)
         # Let's reset session counters but keep total
-        self.processed_count = 0
-        self.success_count = 0
-        self.running_count = 0
+        with self.results_lock:
+            self.processed_count = 0
+            self.success_count = 0
+            self.running_count = 0
         self.update_progress_ui()
         
         # Get pending items
@@ -331,6 +337,7 @@ class Instagram2FAToolApp:
         threading.Thread(target=self.run_thread_pool, args=(threads_count,), daemon=True).start()
 
     def run_thread_pool(self, max_workers):
+        ensure_chromedriver()
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
             while not self.task_queue.empty() and not self.stop_event.is_set():
@@ -353,7 +360,8 @@ class Instagram2FAToolApp:
         if self.stop_event.is_set(): return
         
         # Start Running
-        self.running_count += 1
+        with self.results_lock:
+            self.running_count += 1
         self.root.after(0, self.update_progress_ui)
         self.update_input_status(iid, "Đang chạy...", "running")
         
@@ -409,9 +417,11 @@ class Instagram2FAToolApp:
                 except: pass
 
         # Update Counters
-        self.running_count -= 1
-        self.processed_count += 1
-        if is_success: self.success_count += 1
+        with self.results_lock:
+            self.running_count -= 1
+            self.processed_count += 1
+            if is_success:
+                self.success_count += 1
         self.root.after(0, self.update_progress_ui)
 
         # Update Input UI: Fill 2FA column (index 2) and Note (index 10)

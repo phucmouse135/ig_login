@@ -1,17 +1,25 @@
 # config_utils.py
 import time
+import threading
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 
 _CHROMEDRIVER_PATH = None
+_CHROMEDRIVER_LOCK = threading.Lock()
 
 def _get_chromedriver_path():
     global _CHROMEDRIVER_PATH
-    if not _CHROMEDRIVER_PATH:
-        _CHROMEDRIVER_PATH = ChromeDriverManager().install()
+    if _CHROMEDRIVER_PATH:
+        return _CHROMEDRIVER_PATH
+    with _CHROMEDRIVER_LOCK:
+        if not _CHROMEDRIVER_PATH:
+            _CHROMEDRIVER_PATH = ChromeDriverManager().install()
     return _CHROMEDRIVER_PATH
+
+def ensure_chromedriver():
+    return _get_chromedriver_path()
 
 def get_driver(headless=True):
     options = Options()
