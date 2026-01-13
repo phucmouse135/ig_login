@@ -24,6 +24,20 @@ def _raise_if_change_not_allowed_yet(driver):
         print("   [2FA] ERROR: " + msg)
         raise RuntimeError(msg)
 
+def _is_account_choice_popup(driver):
+    try:
+        body_text = driver.find_element(By.TAG_NAME, "body").text.lower()
+    except Exception:
+        body_text = ""
+
+    if "two-factor authentication" in body_text and "choose an account" in body_text:
+        return True
+
+    if "xác thực hai yếu tố" in body_text and "chọn tài khoản" in body_text:
+        return True
+
+    return False
+
 def _page_signature(driver):
     try:
         ready = driver.execute_script("return document.readyState")
@@ -147,6 +161,8 @@ def setup_2fa(driver, email, email_pass, target_username=None):
     # Wait manual check
     print("   [2FA] Waiting for next screen...")
     found_step = False
+    popup_start = time.time()
+    popup_timeout = 8
     
     # Increase wait to 60s
     sig = _page_signature(driver)
@@ -162,6 +178,8 @@ def setup_2fa(driver, email, email_pass, target_username=None):
             # Wait for UI stability
             time.sleep(1)
             break
+        if time.time() - popup_start >= popup_timeout and _is_account_choice_popup(driver):
+            raise Exception("ACCOUNT_SELECTION_STUCK")
         sig, last_change, refresh_count, _ = _refresh_if_stuck(
             driver, sig, last_change, stall_seconds=25, max_refresh=1, refresh_count=refresh_count
         )
@@ -436,6 +454,8 @@ def setup_2fa(driver, email, email_pass, target_username=None):
             _raise_if_change_not_allowed_yet(driver)
         
     found_step = False
+    popup_start = time.time()
+    popup_timeout = 8
     
     # Increase wait to 60s
     sig = _page_signature(driver)
@@ -451,6 +471,8 @@ def setup_2fa(driver, email, email_pass, target_username=None):
             # Wait for UI stability
             time.sleep(1)
             break
+        if time.time() - popup_start >= popup_timeout and _is_account_choice_popup(driver):
+            raise Exception("ACCOUNT_SELECTION_STUCK")
         sig, last_change, refresh_count, _ = _refresh_if_stuck(
             driver, sig, last_change, stall_seconds=25, max_refresh=1, refresh_count=refresh_count
         )
