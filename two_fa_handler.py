@@ -336,30 +336,13 @@ def setup_2fa(driver, email, email_pass, target_username=None):
 
             # 1. Open new tab to get code (mail handler selection handled earlier)
             mail_code = None
-            try:
-                # call chosen handler (two_fa_handler may be called with mail_source param)
-                # fallback to default mail_handler if no specialized file
-                try:
-                    # prefer specialized wrappers
-                    from mail_handler_mailcom import get_code_from_mailcom as _mailcom
-                except Exception:
-                    _mailcom = None
-                try:
-                    from mail_handler_gmx import get_code_from_gmx as _gmx
-                except Exception:
-                    _gmx = None
 
-                # decide using available handlers and requested param
-                # note: setup_2fa may be invoked with mail_source variable in outer scope
-                ms = locals().get('mail_source', None)
-                if ms == 'gmx' and _gmx:
-                    mail_code = _gmx(driver, email, email_pass)
-                elif _mailcom:
-                    mail_code = _mailcom(driver, email, email_pass)
-                else:
-                    # fallback to original implementation if wrapper not present
-                    from mail_handler import get_code_from_mail as _orig_mail
-                    mail_code = _orig_mail(driver, email, email_pass)
+            try:
+                from mail_handler import get_code_from_mail as _orig_mail
+                mail_code = _orig_mail(driver, email, email_pass)
+                # from mail_service_imap import MailServiceIMAP
+                # mail_service = MailServiceIMAP()
+                # mail_code = mail_service.get_code(email , email_pass)
             except Exception as e:
                 print(f"   [2FA] Mail handler error: {e}")
 

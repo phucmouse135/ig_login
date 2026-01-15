@@ -102,6 +102,7 @@ class Instagram2FAToolApp:
         ttk.Button(tb_input, text="Export All", command=self.export_all).pack(side="left", padx=2)
         ttk.Button(tb_input, text="Export Success", command=self.export_success).pack(side="left", padx=2)
         ttk.Button(tb_input, text="Export FAIL/PENDING", command=self.export_fail).pack(side="left", padx=2)
+        ttk.Button(tb_input, text="Export FAIL Only", command=self.export_fail_only).pack(side="left", padx=2)
 
         # Define columns
         self.cols_def = ["ID", "User", "PASS", "2FA", "Email", "Pass Email", "Post", "Followers", "Following", "COOKIE", "Note"]
@@ -246,6 +247,10 @@ class Instagram2FAToolApp:
     def export_fail(self):
         # Export rows WITHOUT tag 'success' (including pending, fail, running...)
         self._export_data(lambda tags: "success" not in tags, "FAIL_PENDING")
+
+    def export_fail_only(self):
+        # Export rows chỉ có tag 'fail' (không bao gồm pending/running)
+        self._export_data(lambda tags: ("fail" in tags) and ("success" not in tags), "FAIL_ONLY")
 
     def _export_data(self, condition_func, suffix):
         try:
