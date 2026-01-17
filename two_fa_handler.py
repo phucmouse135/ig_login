@@ -329,20 +329,47 @@ def setup_2fa(driver, email, email_pass, target_username=None):
         if not _is_email_code_checkpoint(driver, attempts=6, delay=0.6):
             print("   [2FA] Checkpoint detected but no email code UI. Continue without mail verification.")
         else:
+
             print("   [2FA] Checkpoint Detected: Email verify required...")
 
             # Do not refresh here: reload can hide the code input after selecting the IG account
             time.sleep(1.5)
 
-            # 1. Open new tab to get code (mail handler selection handled earlier)
-            mail_code = None
+            # --- CHECK EMAIL ON SCREEN vs EMAIL TO OPEN ---
+            # 1. Extract email hint from page (regex)
+            email_hint = None
+            try:
+                body_txt = driver.find_element(By.TAG_NAME, "body").text
+                # Regex: find email pattern (e.g. a****x@...)
+                email_mask_match = re.search(r"[a-zA-Z0-9*_.+-]+@[a-zA-Z0-9*_.+-]+", body_txt)
+                if email_mask_match:
+                    email_hint = email_mask_match.group(0)
+            except Exception:
+                pass
 
+            # 2. Compare masked email with actual email
+            def mask_email(email):
+                # Mask email: keep first char, last char before @, and domain
+                try:
+                    local, domain = email.split('@', 1)
+                    if len(local) > 2:
+                        masked = local[0] + '****' + local[-1] + '@' + domain
+                    else:
+                        masked = local + '@' + domain
+                    return masked
+                except Exception:
+                    return email
+
+            expected_mask = mask_email(email)
+            if email_hint and email_hint.replace('*', '') != expected_mask.replace('*', ''):
+                print(f"   [2FA] ERROR: Email on screen ('{email_hint}') differs from email to open ('{expected_mask}')")
+                raise Exception("DIFFERENT_EMAIL_FOR_2FA")
+
+            # 3. Open new tab to get code (mail handler selection handled earlier)
+            mail_code = None
             try:
                 from mail_handler import get_code_from_mail as _orig_mail
                 mail_code = _orig_mail(driver, email, email_pass)
-                # from mail_service_imap import MailServiceIMAP
-                # mail_service = MailServiceIMAP()
-                # mail_code = mail_service.get_code(email , email_pass)
             except Exception as e:
                 print(f"   [2FA] Mail handler error: {e}")
 

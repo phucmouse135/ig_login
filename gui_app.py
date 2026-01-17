@@ -412,7 +412,7 @@ class Instagram2FAToolApp:
                 result_2fa = "FAIL"
                 
         except Exception as e:
-            status_msg = f"Lỗi: {e}"
+            status_msg = f"ERROR: {e}"
             # Clean msg
             status_msg = status_msg.replace("\n", " ")[:50] # Shorten
             result_2fa = "ERROR"

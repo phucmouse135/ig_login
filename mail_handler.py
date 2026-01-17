@@ -86,7 +86,7 @@ def _find_rows_with_frame_search(driver, verbose=True):
         try:
             driver.switch_to.frame(frame)
             rows = driver.find_elements(By.XPATH, "//table[@id='mail-list']//tbody/tr")
-            if rows:
+                time.sleep(0.3)
                 if verbose:
                     print(f"   [Mail] Found mail list in iframe!")
                 return rows
@@ -96,19 +96,20 @@ def _find_rows_with_frame_search(driver, verbose=True):
         except:
             driver.switch_to.default_content()
     
-    return []
+                time.sleep(0.3)
 
 def _wait_for_mail_rows(driver, timeout=12):
     end_time = time.time() + timeout
     while time.time() < end_time:
         rows = _find_rows_with_frame_search(driver, verbose=False)
-        if rows:
+            poll = 0.3
+            while time.time() < end_time:
             return rows
         time.sleep(0.5)
     return []
 
 
-def _recover_from_hang(driver, reason=""):
+                time.sleep(0.3)
     msg = f" ({reason})" if reason else ""
     print(f"   [Mail] Page seems stuck{msg}. Attempting recovery...")
     _stop_loading(driver)
@@ -118,7 +119,7 @@ def _recover_from_hang(driver, reason=""):
     _wait_dom_ready(driver, timeout=8)
 
 
-def _ensure_logged_in(driver, email, password) -> bool:
+                time.sleep(0.3)
     rows = _wait_for_mail_rows(driver, timeout=4)
     if rows:
         try:
@@ -132,7 +133,7 @@ def _ensure_logged_in(driver, email, password) -> bool:
             driver.switch_to.default_content()
         except Exception:
             pass
-
+                time.sleep(0.3)
         login_btn = wait_element(driver, By.ID, "login-button", timeout=6)
         if login_btn:
             driver.execute_script("arguments[0].click();", login_btn)
@@ -211,14 +212,13 @@ def _find_target_mail_row(driver, target_subject, rows=None):
         if row.find_elements(By.TAG_NAME, "th"):
             continue
 
+        # 2. Check Unread only, skip read mails
+        if not _row_is_unread(row):
+            continue
+
         try:
             row_desc = _describe_row_brief(row)
 
-            # 2. Check Unread
-            if not _row_is_unread(row):
-                # print(f"     [Row {idx}] Read -> Skip.")
-                continue
-            
             # Get Sender and Subject
             try:
                 name_el = row.find_element(By.CSS_SELECTOR, "div.name")
@@ -229,16 +229,16 @@ def _find_target_mail_row(driver, target_subject, rows=None):
                 subj_el = row.find_element(By.CSS_SELECTOR, "span.subject")
                 subj_txt = (subj_el.text + " " + (subj_el.get_attribute("title") or "")).lower()
             except: subj_txt = ""
-            
+
             # 3. Check Condition
             is_instagram = "instagram" in sender_txt or "instagram" in subj_txt
             is_target_subj = (target_subject.lower() in subj_txt) if target_subject else True
-            
+
             if is_instagram and is_target_subj:
                 print(f"   [Mail] => FOUND MAIL (Row {idx}): {row_desc}")
                 return row
             else:
-                 print(f"     [Row {idx}] Unread but logic mismatch: Instagram={is_instagram}, Subj='{target_subject}' -> {is_target_subj}")
+                print(f"     [Row {idx}] Unread but logic mismatch: Instagram={is_instagram}, Subj='{target_subject}' -> {is_target_subj}")
 
         except Exception as e:
             print(f"     [Row {idx}] Error parse row: {e}")
@@ -256,7 +256,7 @@ def _row_is_unread(row) -> bool:
     except Exception:
         return False  # Không xác định được -> coi như False
 
-
+                            time.sleep(0.3)
 def _describe_row_brief(row) -> str:
     """Helper để in log thông tin dòng mail"""
     sender = "Unknown"
@@ -285,57 +285,52 @@ def _click_mail_row(driver, row) -> None:
     try:
         # Scroll - sử dụng block 'nearest' để đỡ bị trượt quá đà
         driver.execute_script("arguments[0].scrollIntoView({block: 'nearest', inline: 'nearest'});", row)
-        time.sleep(1)
-        
-        # Chiến thuật click mới: Cố gắng click vào phần Subject (an toàn nhất)
-        # Nếu không có, click vào td chứa subject
+        time.sleep(0.25)
+
+        # Ưu tiên click vào phần tử chứa code hoặc subject
         target = None
-        
-        # 1. Tìm thẻ subject cụ thể
+        # 1. Ưu tiên thẻ chứa code (nếu có)
         try:
-            target = row.find_element(By.CSS_SELECTOR, "span.subject")
+            target = row.find_element(By.XPATH, ".//*[contains(text(), 'code') or contains(text(), 'mã')]")
         except: pass
-            
-        # 2. Nếu không thấy, tìm td chứa subject
+        # 2. Nếu không thấy, tìm thẻ subject cụ thể
+        if not target:
+            try:
+                target = row.find_element(By.CSS_SELECTOR, "span.subject")
+            except: pass
+        # 3. Nếu không thấy, tìm td chứa subject
         if not target:
             try:
                 target = row.find_element(By.CSS_SELECTOR, "td.subject")
             except: pass
-            
-        # 3. Fallback: Cell date
+        # 4. Fallback: Cell date
         if not target:
-             try:
+            try:
                 target = row.find_element(By.CSS_SELECTOR, "div.date")
-             except: pass
-             
-        # 4. Fallback cuối: Row
+            except: pass
+        # 5. Fallback cuối: Row
         if not target: target = row
-        
+
         print(f"   [Mail] Target click: {target.tag_name} (Text: {target.text[:20]}...)")
-        
+
         # Thực hiện click robust
         clicked = False
-        
-        # Thử JS Click first (Độ ổn định cao nhất cho mail client)
         try:
             driver.execute_script("arguments[0].click();", target)
             print("   [Mail] Click JS Done.")
             clicked = True
         except: pass
-        
         if not clicked:
             try:
                 target.click()
                 print("   [Mail] Click Thường Done.")
-            except: 
+            except:
                 try:
                     ActionChains(driver).move_to_element(target).click().perform()
                     print("   [Mail] Click ActionChains Done.")
                 except:
                     print("   [Mail] Click Fail All Methods.")
-        
-        time.sleep(1)
-
+        time.sleep(0.25)
     except Exception as e:
         print(f"   [Mail] Warning click row: {e}")
 
@@ -464,57 +459,46 @@ def _get_code_from_mail_attempt(driver, email, password):
                 # Check opened
                 print("   [Mail] Waiting for mail content...")
 
+
                 # --- NEW LOGIC: RECURSIVE SEARCH ---
                 def _attempt_extract_in_current_frame(drv):
                     # 1. Try Specific XPath
-                    # Target: P[4] has code
                     xpath_deep = '//*[@id="email_content"]/table/tbody/tr[4]/td/table/tbody/tr/td/table/tbody/tr[2]/td/table/tbody/tr/td/table/tbody/tr/td[2]/table/tbody/tr/td/p[4]'
                     try:
                         el = drv.find_element(By.XPATH, xpath_deep)
                         txt = el.text.strip()
                         raw = el.get_attribute("innerHTML")
-                        # print(f"     [Debug] Found Deep XPath P4: Text='{txt}'")
                         code = extract_instagram_code(txt) or extract_instagram_code(raw)
                         if code: return code
                     except: pass
-
                     # 2. Try #email_content container
                     try:
                         div = drv.find_element(By.ID, "email_content")
                         code = extract_instagram_code(div.get_attribute("innerHTML"))
                         if code: return code
                     except: pass
-
                     # 3. Try Body scan (Fallback)
                     try:
                         body_txt = drv.find_element(By.TAG_NAME, "body").text
-                        # One check if instagram keywords exist
                         if "instagram" in body_txt.lower() or "confirm" in body_txt.lower():
                             body_html = drv.find_element(By.TAG_NAME, "body").get_attribute("innerHTML")
-                            code = extract_instagram_code(body_html) # Priority HTML
-                            if not code: code = extract_instagram_code(body_txt)
+                            code = extract_instagram_code(body_html) or extract_instagram_code(body_txt)
                             if code: return code
                     except: pass
-                    
                     return None
 
                 def _recursive_search_code(drv, depth=0):
-                    # 1. Check current frame
                     found_code = _attempt_extract_in_current_frame(drv)
                     if found_code: return found_code
-                    
-                    # 2. Check child iframes
-                    if depth < 4: # Max depth 4
+                    if depth < 4:
                         frames = drv.find_elements(By.TAG_NAME, "iframe")
-                        # print(f"     [Debug] Depth {depth}: Found {len(frames)} iframes.")
                         for idx, f in enumerate(frames):
                             try:
                                 drv.switch_to.frame(f)
                                 res = _recursive_search_code(drv, depth + 1)
-                                if res:
-                                    drv.switch_to.parent_frame()
-                                    return res
                                 drv.switch_to.parent_frame()
+                                if res:
+                                    return res
                             except:
                                 try: drv.switch_to.parent_frame()
                                 except: pass
@@ -531,7 +515,7 @@ def _get_code_from_mail_attempt(driver, email, password):
                     final_code = _recursive_search_code(driver)
                     if final_code:
                         break
-                    time.sleep(1)
+                    time.sleep(0.25)
 
                 if final_code:
                     print(f"   [Mail] -> FOUND CODE: {final_code}")
