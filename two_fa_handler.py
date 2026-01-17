@@ -336,6 +336,7 @@ def setup_2fa(driver, email, email_pass, target_username=None):
             time.sleep(1.5)
 
             # --- CHECK EMAIL ON SCREEN vs EMAIL TO OPEN ---
+
             # 1. Extract email hint from page (regex)
             email_hint = None
             try:
@@ -347,23 +348,24 @@ def setup_2fa(driver, email, email_pass, target_username=None):
             except Exception:
                 pass
 
-            # 2. Compare masked email with actual email
-            def mask_email(email):
-                # Mask email: keep first char, last char before @, and domain
-                try:
-                    local, domain = email.split('@', 1)
-                    if len(local) > 2:
-                        masked = local[0] + '****' + local[-1] + '@' + domain
-                    else:
-                        masked = local + '@' + domain
-                    return masked
-                except Exception:
-                    return email
+            # 2. Compare checkpoint email and login email using regex
+            def mask_to_regex(mask):
+                # Convert a checkpoint mask like s**t@a.com to regex: s.*t@a.com
+                # Only * is replaced, other chars are literal
+                return re.escape(mask).replace(r'\*', '.*')
 
-            expected_mask = mask_email(email)
-            if email_hint and email_hint.replace('*', '') != expected_mask.replace('*', ''):
-                print(f"   [2FA] ERROR: Email on screen ('{email_hint}') differs from email to open ('{expected_mask}')")
-                raise Exception("DIFFERENT_EMAIL_FOR_2FA")
+            if email_hint and email:
+                # Nếu checkpoint email có *, compile regex trước để tăng tốc
+                if '*' in email_hint:
+                    pattern = re.compile(mask_to_regex(email_hint), re.IGNORECASE)
+                    if not pattern.fullmatch(email):
+                        print(f"   [2FA] ERROR: Email checkpoint mask does not match: '{email_hint}' vs '{email}'")
+                        raise Exception("DIFFERENT_EMAIL")
+                else:
+                    # Direct compare nhanh
+                    if email_hint.lower() != email.lower():
+                        print(f"   [2FA] ERROR: Email mismatch: '{email_hint}' vs '{email}'")
+                        raise Exception("DIFFERENT_EMAIL")
 
             # 3. Open new tab to get code (mail handler selection handled earlier)
             mail_code = None
