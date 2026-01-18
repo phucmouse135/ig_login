@@ -328,7 +328,7 @@ class Instagram2FAToolApp:
             status_note = str(curr_vals[10]) # Chuyển thành string cho chắc
             
             # Skip logic: Nếu "Thành công" HOẶC "ALREADY_2FA_ON" nằm trong note -> Bỏ qua
-            if "Thành công" in status_note or "ALREADY_2FA_ON" in status_note:
+            if "Thành công" in status_note or "ALREADY_2FA_ON" in status_note or "2FA EXISTS" in status_note or "Success" in status_note:
                 continue
                 
             self.task_queue.put(iid)
